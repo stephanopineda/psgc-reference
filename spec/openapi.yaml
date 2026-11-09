@@ -1,0 +1,483 @@
+openapi: 3.1.0
+
+info:
+  title: PSGC Reference API
+  version: 1.0.0
+  description: >
+    Read-only, release-aware API for Philippine Standard Geographic Code
+    reference data published by the Philippine Statistics Authority.
+
+servers:
+  - url: https://api.example.com
+    description: Production URL placeholder
+
+paths:
+  /healthz:
+    get:
+      operationId: getHealth
+      summary: Check API and database health
+      responses:
+        "200":
+          description: API and database are available
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /v1/releases:
+    get:
+      operationId: listReleases
+      summary: List available source releases
+      responses:
+        "200":
+          description: Release list ordered by publication date descending
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReleaseListResponse"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/releases/{releaseId}:
+    get:
+      operationId: getRelease
+      summary: Get release metadata and validation finding counts
+      parameters:
+        - $ref: "#/components/parameters/ReleaseId"
+      responses:
+        "200":
+          description: Release metadata and validation finding counts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReleaseDetailResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/geographic-levels:
+    get:
+      operationId: listGeographicLevels
+      summary: List geographic levels in a selected release
+      parameters:
+        - $ref: "#/components/parameters/ReleaseQuery"
+      responses:
+        "200":
+          description: Geographic levels and record counts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GeographicLevelsResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/records:
+    get:
+      operationId: listRecords
+      summary: Search records in an explicitly selected release
+      description: >
+        All record searches require an explicit release_id. No release is
+        selected implicitly. Results use stable name and PSGC code ordering.
+      parameters:
+        - $ref: "#/components/parameters/ReleaseQuery"
+        - name: q
+          in: query
+          description: Case-insensitive partial match against the record name.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+        - name: geographic_level
+          in: query
+          schema:
+            type: string
+        - name: city_class
+          in: query
+          schema:
+            type: string
+        - name: income_classification
+          in: query
+          schema:
+            type: string
+        - name: urban_rural
+          in: query
+          schema:
+            type: string
+        - name: page
+          in: query
+          description: One-based page number.
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: page_size
+          in: query
+          description: Number of records per page.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 25
+      responses:
+        "200":
+          description: Paginated source records
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecordListResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/records/{psgcCode}:
+    get:
+      operationId: getRecord
+      summary: Look up a PSGC code in an explicitly selected release
+      parameters:
+        - name: psgcCode
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[0-9]{10}$"
+        - $ref: "#/components/parameters/ReleaseQuery"
+      responses:
+        "200":
+          description: Record and source provenance
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecordDetailResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+components:
+  parameters:
+    ReleaseId:
+      name: releaseId
+      in: path
+      required: true
+      schema:
+        type: string
+    ReleaseQuery:
+      name: release_id
+      in: query
+      required: true
+      description: Explicit source release identifier.
+      schema:
+        type: string
+        minLength: 1
+
+  responses:
+    BadRequest:
+      description: Invalid request or query parameter
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotFound:
+      description: Requested resource does not exist
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    ServiceUnavailable:
+      description: Database health check failed
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    InternalError:
+      description: Unexpected server error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+  schemas:
+    HealthResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            status:
+              type: string
+              const: ok
+            database:
+              type: string
+              const: ok
+          required:
+            - status
+            - database
+      required:
+        - data
+
+    Release:
+      type: object
+      properties:
+        release_id:
+          type: string
+        publication_date:
+          type: string
+          format: date
+        source_filename:
+          type: string
+        source_sha256:
+          type: string
+        source_size_bytes:
+          type: integer
+        worksheet_name:
+          type: string
+        normalization_profile_version:
+          type: string
+        record_count:
+          type: integer
+        status:
+          type: string
+        is_official_current:
+          type: integer
+          enum: [0, 1]
+        imported_at:
+          type: string
+        created_at:
+          type: string
+        population_reference_year:
+          type: [integer, "null"]
+        urban_rural_reference_year:
+          type: [integer, "null"]
+        income_classification_basis:
+          type: [string, "null"]
+        source_profile_id:
+          type: [string, "null"]
+        extraction_profile_version:
+          type: [string, "null"]
+      required:
+        - release_id
+        - publication_date
+        - source_filename
+        - source_sha256
+        - source_size_bytes
+        - worksheet_name
+        - normalization_profile_version
+        - record_count
+        - status
+        - is_official_current
+        - imported_at
+        - created_at
+
+    FindingCount:
+      type: object
+      properties:
+        severity:
+          type: string
+        count:
+          type: integer
+      required:
+        - severity
+        - count
+
+    GeographicLevel:
+      type: object
+      properties:
+        geographic_level:
+          type: string
+        record_count:
+          type: integer
+      required:
+        - geographic_level
+        - record_count
+
+    SourceRecord:
+      type: object
+      properties:
+        release_id:
+          type: string
+        psgc_code:
+          type: string
+          pattern: "^[0-9]{10}$"
+        source_record_id:
+          type: string
+        source_row_number:
+          type: integer
+        name:
+          type: string
+        correspondence_code:
+          type: [string, "null"]
+        geographic_level:
+          type: [string, "null"]
+        old_names:
+          type: [string, "null"]
+        city_class:
+          type: [string, "null"]
+        income_classification:
+          type: [string, "null"]
+        urban_rural:
+          type: [string, "null"]
+        population:
+          type: [integer, "null"]
+        population_annotation:
+          type: [string, "null"]
+        source_status_value:
+          type: [string, "null"]
+      required:
+        - release_id
+        - psgc_code
+        - source_record_id
+        - source_row_number
+        - name
+        - correspondence_code
+        - geographic_level
+        - old_names
+        - city_class
+        - income_classification
+        - urban_rural
+        - population
+        - population_annotation
+        - source_status_value
+
+    RecordDetail:
+      allOf:
+        - $ref: "#/components/schemas/SourceRecord"
+        - type: object
+          properties:
+            source_values:
+              type: object
+              additionalProperties: true
+            normalization_events:
+              type: object
+              additionalProperties: true
+          required:
+            - source_values
+            - normalization_events
+
+    ReleaseListResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Release"
+        meta:
+          type: object
+          properties:
+            count:
+              type: integer
+            ordering:
+              type: string
+          required:
+            - count
+            - ordering
+      required:
+        - data
+        - meta
+
+    ReleaseDetailResponse:
+      type: object
+      properties:
+        data:
+          allOf:
+            - $ref: "#/components/schemas/Release"
+            - type: object
+              properties:
+                validation_findings:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/FindingCount"
+              required:
+                - validation_findings
+      required:
+        - data
+
+    GeographicLevelsResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/GeographicLevel"
+        meta:
+          type: object
+          properties:
+            release_id:
+              type: string
+            count:
+              type: integer
+            unclassified_record_count:
+              type: integer
+          required:
+            - release_id
+            - count
+            - unclassified_record_count
+      required:
+        - data
+        - meta
+
+    RecordListResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/SourceRecord"
+        meta:
+          type: object
+          properties:
+            release_id:
+              type: string
+            page:
+              type: integer
+            page_size:
+              type: integer
+            total:
+              type: integer
+            total_pages:
+              type: integer
+          required:
+            - release_id
+            - page
+            - page_size
+            - total
+            - total_pages
+      required:
+        - data
+        - meta
+
+    RecordDetailResponse:
+      type: object
+      properties:
+        data:
+          $ref: "#/components/schemas/RecordDetail"
+      required:
+        - data
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            details: {}
+          required:
+            - code
+            - message
+      required:
+        - error

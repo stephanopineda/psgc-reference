@@ -70,7 +70,59 @@ Run Ruff:
 
 ### API
 
-API setup instructions will be added when the API project is initialized.
+Install dependencies from the repository root:
+
+    npm install
+
+Apply the D1 migrations to the local database:
+
+    npm run db:migrate:local
+
+Start the local Worker:
+
+    npm run dev
+
+The Worker uses the D1 binding configured in `wrangler.jsonc`. The local
+database is stored in Wrangler's local state directory and is separate from
+any remote Cloudflare D1 database.
+
+Run API type checking and tests:
+
+    npm run typecheck
+    npm run test:api
+
+The API tests use a mocked D1 binding and do not require a remote database.
+
+#### API endpoints
+
+All record queries require an explicit `release_id`. The API does not silently
+select a latest release.
+
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | `/healthz` | API and database health |
+| GET | `/v1/releases` | List available releases and their publication metadata |
+| GET | `/v1/releases/{releaseId}` | Release metadata and validation finding counts |
+| GET | `/v1/geographic-levels?release_id={id}` | Geographic levels and record counts |
+| GET | `/v1/records?release_id={id}` | Paginated record search |
+| GET | `/v1/records/{psgcCode}?release_id={id}` | Record detail and source provenance |
+
+Record search supports `q`, `geographic_level`, `city_class`,
+`income_classification`, `urban_rural`, `page`, and `page_size`.
+Page size is limited to 100 and search terms to 200 characters.
+
+The record detail response includes the original source values and
+normalization events. These are provenance data, not claims that every
+source value has been independently verified.
+
+The geographic-level endpoint groups records by their non-null geographic
+levels. Records with a null geographic level are excluded from those groups
+and reported separately as `meta.unclassified_record_count`.
+
+The OpenAPI 3.1 document is maintained at `spec/openapi.yaml`.
+
+Deployment requires a configured Cloudflare account and a real D1 database.
+Do not deploy using the placeholder database ID in `wrangler.jsonc`.
 
 ## Source Data
 
@@ -93,6 +145,10 @@ PSA source attribution and applicable use constraints must be observed.
 
 ## Project Status
 
-Repository restructuring and source-data analysis are in progress.
-The production ETL pipeline, database schema, and API have not yet been
-implemented.
+The repository includes a Python ETL pipeline, release comparison and
+validation, SQLite/D1 migrations and local imports, and an initial read-only
+Cloudflare Workers API. Four PSA source releases are currently imported into
+the local D1 database. No release is designated as officially current.
+
+Entity identity resolution, reviewed hierarchy data, publication approval
+workflow, and production Cloudflare deployment remain future work.

@@ -4,9 +4,19 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "db:migrate:local": "wrangler d1 migrations apply psgc-reference --local"
+    "db:migrate:local": "wrangler d1 migrations apply psgc-reference --local",
+    "typecheck": "tsc --noEmit",
+    "test:api": "vitest run",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261109.1",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0",
     "wrangler": "4.159.0"
+  },
+  "dependencies": {
+    "hono": "^4.13.17"
   }
 }
