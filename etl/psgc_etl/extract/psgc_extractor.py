@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -13,23 +14,75 @@ from openpyxl.utils import get_column_letter
 
 from psgc_etl.extract.workbook_profiler import PSGC_SHEET_NAME
 
-EXTRACTION_PROFILE_VERSION = "1.0"
+EXTRACTION_PROFILE_VERSION = "2.0"
 
-# This profile applies to the inspected 1Q 2024, 4Q 2024, and 1Q 2025
-# PSA workbooks. Other source layouts require an explicitly reviewed profile.
-SOURCE_COLUMNS = (
-    ("10-digit PSGC", "psgc_code"),
-    ("Name", "name"),
-    ("Correspondence Code", "correspondence_code"),
-    ("Geographic Level", "geographic_level"),
-    ("Old names", "old_names"),
-    ("City Class", "city_class"),
-    ("Income\nClassification", "income_classification"),
-    ("Urban / Rural\n(based on 2020 CPH)", "urban_rural"),
-    ("2020 Population", "population"),
-    (None, "population_annotation"),
-    ("Status", "source_status_value"),
-)
+
+# Column positions are deliberately not hardcoded. Each profile describes
+# the ordered header signature and its semantic field mapping.
+SOURCE_PROFILES = {
+    "psa-legacy-2024-2025": {
+        "headers": (
+            "10-digit PSGC",
+            "Name",
+            "Correspondence Code",
+            "Geographic Level",
+            "Old names",
+            "City Class",
+            "Income\nClassification",
+            "Urban / Rural\n(based on 2020 CPH)",
+            "2020 Population",
+            None,
+            "Status",
+        ),
+        "fields": (
+            "psgc_code",
+            "name",
+            "correspondence_code",
+            "geographic_level",
+            "old_names",
+            "city_class",
+            "income_classification",
+            "urban_rural",
+            "population",
+            "population_annotation",
+            "source_status_value",
+        ),
+        "population_reference_year": 2020,
+        "urban_rural_reference_year": 2020,
+        "income_classification_basis": None,
+    },
+    "psa-2026-dof-074-2024": {
+        "headers": (
+            "10-digit PSGC",
+            "Name",
+            "Correspondence Code",
+            "Geographic Level",
+            "Old names",
+            "City Class",
+            "Income\nClassification (DOF DO No. 074.2024)",
+            "Urban / Rural\n(based on 2024 CPH)",
+            "2024 Population",
+            None,
+            "Status",
+        ),
+        "fields": (
+            "psgc_code",
+            "name",
+            "correspondence_code",
+            "geographic_level",
+            "old_names",
+            "city_class",
+            "income_classification",
+            "urban_rural",
+            "population",
+            "population_annotation",
+            "source_status_value",
+        ),
+        "population_reference_year": 2024,
+        "urban_rural_reference_year": 2024,
+        "income_classification_basis": "DOF DO No. 074.2024",
+    },
+}
 
 
 def _sha256(path: Path) -> str:
@@ -49,64 +102,86 @@ def _normalize_header(value: Any) -> str | None:
 
 
 def _python_type(value: Any) -> str:
-    if value is None:
-        return "NoneType"
-    return type(value).__name__
+    return "NoneType" if value is None else type(value).__name__
 
 
 def _is_populated(value: Any) -> bool:
     return value is not None and value != ""
 
 
-def _validate_headers(worksheet: Any) -> list[Any]:
-    expected_headers = [header for header, _ in SOURCE_COLUMNS]
-    actual_headers = [
-        worksheet.cell(row=1, column=index).value
-        for index in range(1, len(SOURCE_COLUMNS) + 1)
-    ]
-
-    normalized_expected = [
-        _normalize_header(header) for header in expected_headers
-    ]
-    normalized_actual = [
-        _normalize_header(header) for header in actual_headers
-    ]
-
-    if normalized_actual != normalized_expected:
-        differences = [
-            {
-                "column": index,
-                "expected": expected_headers[index - 1],
-                "actual": actual_headers[index - 1],
-            }
-            for index in range(1, len(SOURCE_COLUMNS) + 1)
-            if normalized_actual[index - 1] != normalized_expected[index - 1]
-        ]
-        raise ValueError(
-            f"Unexpected PSGC worksheet headers in '{worksheet.title}': "
-            f"{differences}"
-        )
-
-    populated_cells = [
-        cell
+def _detect_source_profile(worksheet: Any) -> dict[str, Any]:
+    """Identify an explicitly supported contiguous header layout."""
+    populated_header_columns = [
+        cell.column
         for cell in worksheet._cells.values()
-        if _is_populated(cell.value)
+        if cell.row == 1 and _is_populated(cell.value)
     ]
-    unexpected_columns = sorted(
+
+    if not populated_header_columns:
+        raise ValueError("PSGC worksheet has no populated header row.")
+
+    for profile_id, profile in SOURCE_PROFILES.items():
+        expected = [
+            _normalize_header(value)
+            for value in profile["headers"]
+        ]
+        width = len(expected)
+
+        for start_column in range(
+            min(populated_header_columns),
+            max(populated_header_columns) - width + 2,
+        ):
+            actual = [
+                _normalize_header(
+                    worksheet.cell(row=1, column=start_column + offset).value
+                )
+                for offset in range(width)
+            ]
+
+            if actual == expected:
+                return {
+                    "profile_id": profile_id,
+                    "definition": profile,
+                    "start_column": start_column,
+                    "end_column": start_column + width - 1,
+                    "headers": [
+                        worksheet.cell(
+                            row=1,
+                            column=start_column + offset,
+                        ).value
+                        for offset in range(width)
+                    ],
+                }
+
+    raise ValueError(
+        f"Unexpected PSGC worksheet headers in '{worksheet.title}'. "
+        "No reviewed source profile matches the header row."
+    )
+
+
+def _validate_populated_columns(
+    worksheet: Any,
+    *,
+    start_column: int,
+    end_column: int,
+    last_data_row: int,
+) -> None:
+    """Reject unexpected populated columns within the actual data region."""
+    unexpected = sorted(
         {
             cell.column
-            for cell in populated_cells
-            if cell.column > len(SOURCE_COLUMNS)
+            for cell in worksheet._cells.values()
+            if cell.row <= last_data_row
+            and _is_populated(cell.value)
+            and not start_column <= cell.column <= end_column
         }
     )
 
-    if unexpected_columns:
+    if unexpected:
         raise ValueError(
-            "Unexpected populated PSGC worksheet columns: "
-            f"{unexpected_columns}"
+            "Unexpected populated PSGC worksheet columns within the data "
+            f"region: {unexpected}"
         )
-
-    return actual_headers
 
 
 def _extract_cell(
@@ -114,6 +189,7 @@ def _extract_cell(
     cached_cell: Cell,
     *,
     source_header: Any,
+    field_name: str,
     column_index: int,
 ) -> dict[str, Any]:
     is_formula = formula_cell.data_type == "f"
@@ -123,7 +199,7 @@ def _extract_cell(
         "column_letter": get_column_letter(column_index),
         "coordinate": formula_cell.coordinate,
         "source_header": source_header,
-        "field_name": SOURCE_COLUMNS[column_index - 1][1],
+        "field_name": field_name,
         "raw_value": formula_cell.value,
         "python_type": _python_type(formula_cell.value),
         "cell_data_type": formula_cell.data_type,
@@ -136,6 +212,49 @@ def _extract_cell(
         "cached_data_type": (
             cached_cell.data_type if is_formula else None
         ),
+    }
+
+
+def _extract_publication_metadata(workbook: Any) -> dict[str, Any]:
+    """Read release metadata without assuming all metadata cells are present."""
+    if "Metadata" not in workbook.sheetnames:
+        return {
+            "publication_date": None,
+            "publication_date_raw": None,
+        }
+
+    worksheet = workbook["Metadata"]
+    values = {}
+
+    for row in worksheet.iter_rows(
+        min_row=1,
+        max_row=min(worksheet.max_row, 100),
+        min_col=1,
+        max_col=2,
+    ):
+        label = row[0].value
+        value = row[1].value
+
+        if isinstance(label, str):
+            values[label.strip().casefold()] = value
+
+    raw_date = values.get("publication date:")
+    publication_date = None
+
+    if isinstance(raw_date, datetime):
+        publication_date = raw_date.date().isoformat()
+    elif isinstance(raw_date, str):
+        try:
+            publication_date = datetime.strptime(
+                raw_date.strip(),
+                "%d %B %Y",
+            ).date().isoformat()
+        except ValueError:
+            publication_date = None
+
+    return {
+        "publication_date": publication_date,
+        "publication_date_raw": raw_date,
     }
 
 
@@ -176,24 +295,95 @@ def extract_psgc_records(path: str | Path) -> dict[str, Any]:
         formula_sheet = formula_workbook[PSGC_SHEET_NAME]
         cached_sheet = cached_workbook[PSGC_SHEET_NAME]
 
-        headers = _validate_headers(formula_sheet)
+        detected = _detect_source_profile(formula_sheet)
+        start_column = detected["start_column"]
+        end_column = detected["end_column"]
+        headers = detected["headers"]
+        profile = detected["definition"]
+        fields = profile["fields"]
 
-        populated_cells = [
-            cell
-            for cell in formula_sheet._cells.values()
-            if _is_populated(cell.value)
-        ]
-        last_data_row = max(
-            (cell.row for cell in populated_cells if cell.row > 1),
-            default=1,
+        # Identify data rows by their tabular structure rather than by
+        # non-empty cells alone. Footnotes may occupy the PSGC-code column
+        # while containing explanatory text instead of a code.
+        def is_code_candidate(value: Any) -> bool:
+            if isinstance(value, bool) or value is None:
+                return False
+
+            if isinstance(value, (int, float)):
+                return value >= 0 and value.is_integer() if isinstance(
+                    value, float
+                ) else value >= 0
+
+            return isinstance(value, str) and value.strip().isdigit()
+
+        data_candidate_rows = set()
+
+        for row_number in range(2, formula_sheet.max_row + 1):
+            code_value = formula_sheet.cell(
+                row=row_number,
+                column=start_column,
+            ).value
+
+            has_other_data = any(
+                _is_populated(
+                    formula_sheet.cell(
+                        row=row_number,
+                        column=column_index,
+                    ).value
+                )
+                for column_index in range(
+                    start_column + 1,
+                    end_column + 1,
+                )
+            )
+
+            if is_code_candidate(code_value) or has_other_data:
+                data_candidate_rows.add(row_number)
+
+        last_data_row = max(data_candidate_rows, default=1)
+
+        _validate_populated_columns(
+            formula_sheet,
+            start_column=start_column,
+            end_column=end_column,
+            last_data_row=last_data_row,
         )
+
+        trailing_notes = []
+
+        for row_number in range(last_data_row + 1, formula_sheet.max_row + 1):
+            note_cells = []
+
+            for column_index in range(1, formula_sheet.max_column + 1):
+                cell = formula_sheet.cell(
+                    row=row_number,
+                    column=column_index,
+                )
+
+                if _is_populated(cell.value):
+                    note_cells.append({
+                        "coordinate": cell.coordinate,
+                        "column_index": column_index,
+                        "column_letter": get_column_letter(column_index),
+                        "raw_value": cell.value,
+                        "python_type": _python_type(cell.value),
+                    })
+
+            if note_cells:
+                trailing_notes.append({
+                    "source_row_number": row_number,
+                    "cells": note_cells,
+                })
 
         records: list[dict[str, Any]] = []
 
         for row_number in range(2, last_data_row + 1):
             formula_cells = [
-                formula_sheet.cell(row=row_number, column=column_index)
-                for column_index in range(1, len(SOURCE_COLUMNS) + 1)
+                formula_sheet.cell(
+                    row=row_number,
+                    column=column_index,
+                )
+                for column_index in range(start_column, end_column + 1)
             ]
 
             if not any(_is_populated(cell.value) for cell in formula_cells):
@@ -201,20 +391,19 @@ def extract_psgc_records(path: str | Path) -> dict[str, Any]:
 
             cells = {}
 
-            for column_index, formula_cell in enumerate(
-                formula_cells,
-                start=1,
-            ):
+            for offset, formula_cell in enumerate(formula_cells):
+                column_index = start_column + offset
                 cached_cell = cached_sheet.cell(
                     row=row_number,
                     column=column_index,
                 )
+                field_name = fields[offset]
 
-                field_name = SOURCE_COLUMNS[column_index - 1][1]
                 cells[field_name] = _extract_cell(
                     formula_cell,
                     cached_cell,
-                    source_header=headers[column_index - 1],
+                    source_header=headers[offset],
+                    field_name=field_name,
                     column_index=column_index,
                 )
 
@@ -229,8 +418,25 @@ def extract_psgc_records(path: str | Path) -> dict[str, Any]:
                 }
             )
 
+        publication_metadata = _extract_publication_metadata(
+            formula_workbook
+        )
+
         return {
             "extraction_profile_version": EXTRACTION_PROFILE_VERSION,
+            "source_profile_id": detected["profile_id"],
+            "source_metadata": {
+                **publication_metadata,
+                "population_reference_year": profile[
+                    "population_reference_year"
+                ],
+                "urban_rural_reference_year": profile[
+                    "urban_rural_reference_year"
+                ],
+                "income_classification_basis": profile[
+                    "income_classification_basis"
+                ],
+            },
             "source_artifact": {
                 "filename": source_path.name,
                 "size_bytes": source_path.stat().st_size,
@@ -240,18 +446,18 @@ def extract_psgc_records(path: str | Path) -> dict[str, Any]:
             "source_headers": headers,
             "column_mapping": [
                 {
-                    "column_index": index,
-                    "column_letter": get_column_letter(index),
+                    "column_index": start_column + offset,
+                    "column_letter": get_column_letter(
+                        start_column + offset
+                    ),
                     "source_header": header,
-                    "field_name": field_name,
+                    "field_name": fields[offset],
                 }
-                for index, (header, field_name) in enumerate(
-                    SOURCE_COLUMNS,
-                    start=1,
-                )
+                for offset, header in enumerate(headers)
             ],
             "record_count": len(records),
             "records": records,
+            "trailing_notes": trailing_notes,
         }
     finally:
         formula_workbook.close()

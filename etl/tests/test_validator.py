@@ -338,3 +338,49 @@ def test_invalid_code_length_configuration_is_rejected() -> None:
         assert "positive integer" in str(error)
     else:
         raise AssertionError("Expected ValueError for invalid code length")
+
+
+def test_documented_source_population_exception_requires_review() -> None:
+    record = _record(psgc_code="0990100000", population=None)
+    record["cells"]["population"].update(
+        {
+            "raw_value": "#N/A",
+            "normalized_value": None,
+            "cell_data_type": "e",
+            "normalization_status": "REVIEW",
+            "normalization_action": "KNOWN_SOURCE_ERROR_AS_MISSING",
+            "normalization_rationale": "Documented source-specific exception.",
+        }
+    )
+
+    result = validate_psgc_records(_normalized([record]))
+
+    findings = [
+        item for item in result["findings"] if item["rule_id"] == "PSGC011"
+    ]
+    assert len(findings) == 1
+    assert findings[0]["severity"] == "REVIEW"
+    assert findings[0]["source_value"] == "'#N/A'"
+    assert findings[0]["normalized_value"] is None
+    assert findings[0]["message"] == "Documented source-specific exception."
+
+
+def test_unrecognized_population_error_remains_psgc005() -> None:
+    record = _record()
+    record["cells"]["population"].update(
+        {
+            "raw_value": "#N/A",
+            "normalized_value": None,
+            "cell_data_type": "e",
+            "normalization_status": "REVIEW",
+            "normalization_action": "UNSUPPORTED_POPULATION_VALUE",
+        }
+    )
+
+    result = validate_psgc_records(_normalized([record]))
+
+    assert any(
+        item["rule_id"] == "PSGC005" and item["severity"] == "ERROR"
+        for item in result["findings"]
+    )
+    assert not any(item["rule_id"] == "PSGC011" for item in result["findings"])

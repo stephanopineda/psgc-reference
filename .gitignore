@@ -44,3 +44,6 @@ data/processed/*
 .idea/
 .DS_Store
 Thumbs.db
+
+# Windows download metadata
+*:Zone.Identifier

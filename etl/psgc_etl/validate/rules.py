@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-VALIDATION_RULESET_VERSION = "1.0"
+VALIDATION_RULESET_VERSION = "1.1"
 
 
 @dataclass(frozen=True)
@@ -66,6 +66,11 @@ RULES = {
             "PSGC010",
             "WARNING",
             "Correspondence code is stored in an Excel numeric cell.",
+        ),
+        ValidationRule(
+            "PSGC011",
+            "REVIEW",
+            "A documented source-specific exception was applied to population.",
         ),
     )
 }

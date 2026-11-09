@@ -176,18 +176,18 @@ def validate_psgc_records(
 
         population_cell = cells["population"]
         if population_cell.get("normalization_status") == "REVIEW":
-            rule_id = (
-                "PSGC006"
-                if population_cell.get("normalization_action")
-                == "FORMULA_CACHE_MISSING"
-                else "PSGC005"
-            )
+            action = population_cell.get("normalization_action")
+            rule_id = {
+                "FORMULA_CACHE_MISSING": "PSGC006",
+                "KNOWN_SOURCE_ERROR_AS_MISSING": "PSGC011",
+            }.get(action, "PSGC005")
             findings.append(
                 _finding(
                     rule_id,
                     record,
                     field_name="population",
                     cell=population_cell,
+                    message=population_cell.get("normalization_rationale"),
                 )
             )
 

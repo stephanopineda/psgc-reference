@@ -246,3 +246,53 @@ def test_release_identifiers_are_preserved():
         result["previous_release"]["source_artifact"]["filename"]
         == "PSGC-1Q-2024-Publication-Datafile.xlsx"
     )
+
+
+def test_fields_with_different_source_bases_are_excluded():
+    previous = make_record("0100100010", population=100)
+    current = make_record("0100100010", population=200, row=3)
+
+    previous["cells"]["income_classification"] = make_cell("1st")
+    current["cells"]["income_classification"] = make_cell("2nd")
+
+    previous_release = make_release(previous)
+    current_release = make_release(current)
+
+    previous_release["source_metadata"] = {
+        "population_reference_year": 2020,
+        "urban_rural_reference_year": 2020,
+        "income_classification_basis": None,
+    }
+    current_release["source_metadata"] = {
+        "population_reference_year": 2024,
+        "urban_rural_reference_year": 2024,
+        "income_classification_basis": "DOF DO No. 074.2024",
+    }
+
+    result = compare_normalized_releases(previous_release, current_release)
+
+    assert result["summary"]["changed_count"] == 0
+    assert result["summary"]["unchanged_count"] == 1
+    assert {
+        item["field_name"] for item in result["incomparable_fields"]
+    } == {
+        "population",
+        "urban_rural",
+        "income_classification",
+    }
+    assert result["previous_release"]["population_reference_year"] == 2020
+    assert result["current_release"]["population_reference_year"] == 2024
+
+
+def test_fields_with_equal_or_missing_bases_remain_comparable():
+    previous = make_record("0100100010", population=100)
+    current = make_record("0100100010", population=200, row=3)
+
+    result = compare_normalized_releases(
+        make_release(previous),
+        make_release(current),
+    )
+
+    assert result["incomparable_fields"] == []
+    assert result["summary"]["changed_count"] == 1
+    assert result["changed_records"][0]["changes"][0]["field_name"] == "population"

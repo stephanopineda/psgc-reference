@@ -5,7 +5,9 @@ from __future__ import annotations
 import math
 from typing import Any
 
-NORMALIZATION_PROFILE_VERSION = "1.1"
+from psgc_etl.transform.source_adapters import apply_source_adapters
+
+NORMALIZATION_PROFILE_VERSION = "1.2"
 MAX_SAFE_INTEGER = 2**53 - 1
 
 IDENTIFIER_FIELDS = {
@@ -179,6 +181,10 @@ def normalize_psgc_records(extraction: dict[str, Any]) -> dict[str, Any]:
             field_name: _normalize_cell(field_name, cell)
             for field_name, cell in record["cells"].items()
         }
+        apply_source_adapters(
+            normalized_cells,
+            source_profile_id=extraction.get("source_profile_id"),
+        )
 
         normalized_records.append(
             {
@@ -192,6 +198,12 @@ def normalize_psgc_records(extraction: dict[str, Any]) -> dict[str, Any]:
     return {
         "normalization_profile_version": NORMALIZATION_PROFILE_VERSION,
         "source_artifact": extraction["source_artifact"],
+        "source_profile_id": extraction.get("source_profile_id"),
+        "source_metadata": extraction.get("source_metadata", {}),
+        "extraction_profile_version": extraction.get(
+            "extraction_profile_version"
+        ),
+        "trailing_notes": extraction.get("trailing_notes", []),
         "worksheet_name": extraction["worksheet_name"],
         "source_headers": extraction["source_headers"],
         "column_mapping": extraction["column_mapping"],

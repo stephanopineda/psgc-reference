@@ -108,11 +108,23 @@ def _release_metadata(
     normalized_release: dict[str, Any],
     release_id: str | None,
 ) -> dict[str, Any]:
+    metadata = normalized_release.get("source_metadata", {})
     return {
         "release_id": release_id,
         "source_artifact": normalized_release.get("source_artifact"),
         "worksheet_name": normalized_release.get("worksheet_name"),
         "record_count": normalized_release.get("record_count"),
+        "source_profile_id": normalized_release.get("source_profile_id"),
+        "extraction_profile_version": normalized_release.get(
+            "extraction_profile_version"
+        ),
+        "population_reference_year": metadata.get("population_reference_year"),
+        "urban_rural_reference_year": metadata.get(
+            "urban_rural_reference_year"
+        ),
+        "income_classification_basis": metadata.get(
+            "income_classification_basis"
+        ),
     }
 
 
@@ -176,6 +188,41 @@ def _candidate_groups(
     return groups
 
 
+
+def _incomparable_fields(
+    previous_release: dict[str, Any],
+    current_release: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Identify attributes whose source reference bases differ."""
+    previous_metadata = previous_release.get("source_metadata", {})
+    current_metadata = current_release.get("source_metadata", {})
+
+    basis_fields = {
+        "population": "population_reference_year",
+        "urban_rural": "urban_rural_reference_year",
+        "income_classification": "income_classification_basis",
+    }
+
+    incomparable = []
+
+    for field_name, metadata_key in basis_fields.items():
+        previous_basis = previous_metadata.get(metadata_key)
+        current_basis = current_metadata.get(metadata_key)
+
+        if previous_basis != current_basis:
+            incomparable.append(
+                {
+                    "field_name": field_name,
+                    "basis_key": metadata_key,
+                    "previous_basis": previous_basis,
+                    "current_basis": current_basis,
+                    "reason": "SOURCE_REFERENCE_BASIS_CHANGED",
+                }
+            )
+
+    return incomparable
+
+
 def compare_normalized_releases(
     previous_release: dict[str, Any],
     current_release: dict[str, Any],
@@ -199,6 +246,14 @@ def compare_normalized_releases(
     removed_codes = sorted(previous_codes - current_codes)
     added_codes = sorted(current_codes - previous_codes)
 
+    incomparable_fields = _incomparable_fields(
+        previous_release, current_release
+    )
+    excluded_fields = {item["field_name"] for item in incomparable_fields}
+    comparable_fields = tuple(
+        field for field in COMPARABLE_FIELDS if field not in excluded_fields
+    )
+
     changed_records: list[dict[str, Any]] = []
 
     for code in matched_codes:
@@ -206,7 +261,7 @@ def compare_normalized_releases(
         current_record = current[code]
         changes: list[dict[str, Any]] = []
 
-        for field_name in COMPARABLE_FIELDS:
+        for field_name in comparable_fields:
             before = _normalized_value(previous_record, field_name)
             after = _normalized_value(current_record, field_name)
 
@@ -244,7 +299,7 @@ def compare_normalized_releases(
     unchanged_count = len(matched_codes) - len(changed_records)
 
     return {
-        "comparison_version": "1.0",
+        "comparison_version": "1.1",
         "previous_release": _release_metadata(
             previous_release, previous_release_id
         ),
@@ -268,5 +323,6 @@ def compare_normalized_releases(
             _record_summary(record) for record in removed_records
         ],
         "changed_records": changed_records,
+        "incomparable_fields": incomparable_fields,
         "identity_candidate_groups": candidate_groups,
     }

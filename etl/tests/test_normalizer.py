@@ -324,3 +324,64 @@ def test_valid_numeric_population_is_marked_valid() -> None:
 
     assert cell["normalized_value"] == 12345
     assert cell["normalization_status"] == "VALID"
+
+
+def test_documented_2026_isabela_population_error_is_adapted() -> None:
+    extraction = _extraction(
+        {
+            "psgc_code": _cell("0990100000", data_type="s"),
+            "population": _cell("#N/A", data_type="e"),
+        }
+    )
+    extraction["source_profile_id"] = "psa-2026-dof-074-2024"
+    extraction["source_metadata"] = {
+        "population_reference_year": 2024,
+    }
+    extraction["extraction_profile_version"] = "2.0"
+    extraction["trailing_notes"] = []
+
+    result = normalize_psgc_records(extraction)
+    population = result["records"][0]["cells"]["population"]
+
+    assert population["raw_value"] == "#N/A"
+    assert population["cell_data_type"] == "e"
+    assert population["normalized_value"] is None
+    assert population["normalization_action"] == "KNOWN_SOURCE_ERROR_AS_MISSING"
+    assert population["normalization_status"] == "REVIEW"
+    assert "1Q 2024" in population["normalization_rationale"]
+    assert result["source_profile_id"] == "psa-2026-dof-074-2024"
+    assert result["source_metadata"]["population_reference_year"] == 2024
+    assert result["extraction_profile_version"] == "2.0"
+
+
+def test_unrelated_excel_population_error_is_not_adapted() -> None:
+    extraction = _extraction(
+        {
+            "psgc_code": _cell("0100100001", data_type="s"),
+            "population": _cell("#N/A", data_type="e"),
+        }
+    )
+    extraction["source_profile_id"] = "psa-2026-dof-074-2024"
+
+    result = normalize_psgc_records(extraction)
+    population = result["records"][0]["cells"]["population"]
+
+    assert population["raw_value"] == "#N/A"
+    assert population["normalized_value"] is None
+    assert population["normalization_action"] == "UNSUPPORTED_POPULATION_VALUE"
+    assert population["normalization_status"] == "REVIEW"
+
+
+def test_isabela_exception_is_not_applied_to_another_source_profile() -> None:
+    extraction = _extraction(
+        {
+            "psgc_code": _cell("0990100000", data_type="s"),
+            "population": _cell("#N/A", data_type="e"),
+        }
+    )
+    extraction["source_profile_id"] = "psa-legacy-2024-2025"
+
+    result = normalize_psgc_records(extraction)
+    population = result["records"][0]["cells"]["population"]
+
+    assert population["normalization_action"] == "UNSUPPORTED_POPULATION_VALUE"
