@@ -8,7 +8,8 @@
     "typecheck": "tsc --noEmit",
     "test:api": "vitest run",
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy"
+    "deploy": "wrangler deploy",
+    "test:integration": "node scripts/smoke-test-local.mjs"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261109.1",

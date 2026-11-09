@@ -93,6 +93,15 @@ Run API type checking and tests:
 
 The API tests use a mocked D1 binding and do not require a remote database.
 
+Run the local integration smoke test against the actual Wrangler D1 database.
+Start the local Worker in a separate terminal with `npm run dev`, then run:
+
+    npm run test:integration
+
+The integration test checks database health, release metadata, geographic
+levels, record search and pagination, source provenance, and the explicit
+release requirement. The local D1 database must be migrated and populated.
+
 #### API endpoints
 
 All record queries require an explicit `release_id`. The API does not silently
