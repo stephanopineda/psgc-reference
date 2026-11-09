@@ -37,7 +37,8 @@ The `PSGC` worksheet is the authoritative source for the individual geographic r
 
 ### 2.2 Expected columns
 
-The currently inspected PSA workbooks contain 11 columns, including one blank-header column.
+The currently inspected PSA workbooks contain 11 columns, including one
+blank-header column.
 
 | Position | Source header | Internal field | Requirement |
 |---:|---|---|---|
@@ -49,21 +50,38 @@ The currently inspected PSA workbooks contain 11 columns, including one blank-he
 | 6 | City Class | `city_class` | Nullable |
 | 7 | Income Classification | `income_classification` | Nullable |
 | 8 | Urban / Rural (based on 2020 CPH) | `urban_rural` | Nullable |
-| 9 | 2020 Population | `population_2020` | Nullable |
-| 10 | Blank header | Unmapped | Inspect before discarding |
+| 9 | 2020 Population | `population` | Nullable |
+| 10 | Blank header | `population_annotation` | Nullable |
 | 11 | Status | `source_status_value` | Nullable |
 
-Header comparison may normalize line breaks and surrounding whitespace, but must not silently accept missing, reordered, or unexpected columns.
+Header comparison may normalize line breaks and surrounding whitespace, but
+must not silently accept missing, reordered, or unexpected columns.
 
-If the worksheet structure changes, extraction must stop or require an explicitly reviewed mapping update.
+If the worksheet structure changes, extraction must stop or require an
+explicitly reviewed mapping update.
 
-The blank-header column must be inspected. If it contains non-empty values, those values must be reported and retained for investigation rather than silently discarded.
+Although column 10 has no source header, it contains values associated with
+the population figures in column 9. These include numbered footnote references
+and explanatory text describing population inclusions, exclusions, transfers,
+and recomputations.
+
+Map this column to `population_annotation` for the inspected source profile.
+Preserve its original blank header, column position, cell values, and source
+locations in the extracted source representation.
+
+Do not silently discard its values or merge them into `population`, `name`,
+or `source_status_value`.
+
+A future source release may change the meaning or position of this column.
+Such a change requires inspection and an explicitly reviewed mapping update.
 
 ## 3. Release identification and metadata
 
-A release represents one specific PSA publication, not merely a calendar year.
+A release represents one specific PSA publication, not merely a calendar
+year.
 
-Multiple publications may exist within the same year. Therefore, the release identifier must distinguish individual publications.
+Multiple publications may exist within the same year. Therefore, the release
+identifier must distinguish individual publications.
 
 Each imported release must record:
 
@@ -73,6 +91,8 @@ Each imported release must record:
 | `release_name` | Human-readable PSA publication name |
 | `publication_date` | Publication date stated by PSA |
 | `effective_date` | Nullable; populated only when explicitly supported by the source |
+| `population_reference_year` | Reference year of the population figures |
+| `urban_rural_reference_year` | Reference year associated with the urban/rural classification |
 | `source_file_name` | Original workbook filename |
 | `source_file_sha256` | SHA-256 hash of the exact imported workbook |
 | `source_url` | Official source URL, if available |
@@ -80,19 +100,31 @@ Each imported release must record:
 | `is_complete` | Whether the release passed completeness checks |
 | `is_current` | Explicit designation as the current published release |
 
+The population and urban/rural reference years describe the underlying
+statistical data. They are distinct from the PSA publication date.
+
+For the inspected 1Q 2024, 4Q 2024, and 1Q 2025 workbooks, both fields
+refer to 2020.
+
+The applicable source notes and methodology references must also be retained.
+A reference year alone does not fully describe the methodology used to
+produce a classification.
+
 Known source publications:
 
-| Publication | Publication date |
-|---|---|
-| PSGC 1Q 2024 | 2024-03-31 |
-| PSGC 4Q 2024 | 2024-12-31 |
-| PSGC 1Q 2025 | 2025-03-31 |
+| Publication | Publication date | Population reference year | Urban/rural reference year |
+|---|---|---:|---:|
+| PSGC 1Q 2024 | 2024-03-31 | 2020 | 2020 |
+| PSGC 4Q 2024 | 2024-12-31 | 2020 | 2020 |
+| PSGC 1Q 2025 | 2025-03-31 | 2020 | 2020 |
 
-The publication date must come from the source metadata, not from the filename or file modification timestamp when the metadata is available.
+The publication date must come from the source metadata, not from the
+filename or file modification timestamp when the metadata is available.
 
 `imported_at` must never be used as a substitute for publication chronology.
 
-The current release must be explicitly designated. Importing a newer file must not automatically make it current.
+The current release must be explicitly designated. Importing a newer file
+must not automatically make it current.
 
 ## 4. Source values and normalized values
 
@@ -178,6 +210,17 @@ Missing correspondence codes are valid source conditions.
 
 Duplicate correspondence codes must be reported for review, not automatically rejected.
 
+A missing correspondence code is an expected condition and is not, by
+itself, a validation error or warning. The correspondence code represents
+the previous PSGC coding system and is not a required predecessor identifier
+for every record in a later release. Entities introduced after the transition
+to the 10-digit PSGC format may have no correspondence code.
+
+The ETL must preserve a missing correspondence code as `null` in the
+normalized representation. It must not derive a correspondence code from
+the current PSGC code, pad or truncate either identifier, or assume that
+every current entity has a predecessor in the previous coding system.
+
 ### 5.3 Name
 
 Internal field: `name`
@@ -253,29 +296,126 @@ Internal field: `income_classification`
 - Do not infer a classification from another release.
 - Do not assume the classification is permanent across releases.
 
+The inspected PSA Notes worksheet provides additional definitions for
+income-classification values.
+
+In particular:
+
+- `*` indicates that an entity was not reclassified under the referenced
+  Department of Finance order due to incomplete income data.
+- `-` indicates newly created municipalities that were not reclassified.
+
+The Notes worksheet also identifies different update dates for province,
+city, and municipality income classifications.
+
+These source definitions must be retained as release-specific documentation.
+Do not treat these symbols as generic missing-value indicators or infer
+income classifications from the documented income brackets.
+
 ### 5.8 Urban / Rural
 
 Internal field: `urban_rural`
 
 - Nullable.
 - Preserve the original source value.
-- Retain the source's association with the 2020 Census of Population and Housing (2020 CPH).
+- Retain its association with the applicable urban/rural reference year.
 - Do not infer values for missing records.
+
+For the inspected workbooks, the classification is based on the 2020 Census
+of Population and Housing and the PSA resolutions identified in the Notes
+worksheet.
+
+The release metadata must retain `urban_rural_reference_year` separately
+from the publication date and population reference year.
+
+The applicable source methodology and resolution references must also be
+preserved. Do not assume that the reference year alone fully describes the
+classification methodology.
+
+The source values `U`, `R`, and `-` must be preserved as published.
+Do not automatically convert `-` to `NULL` without a documented,
+release-specific interpretation.
 
 ### 5.9 Population
 
-Internal field: `population_2020`
+Internal field: `population`
 
 - Nullable integer.
 - Accept valid whole-number values.
 - Reject invalid numeric representations.
-- Reject negative values unless an authoritative source definition explicitly permits them.
+- Reject negative values unless an authoritative source definition explicitly
+  permits them.
 - Do not round fractional values.
 - Do not substitute population values from another release.
 
-The field represents the population reference supplied by the source, not a live or current population estimate.
+The field represents the population reference supplied by the source, not a
+live or current population estimate.
 
-### 5.10 Status
+For the inspected workbooks, the population reference year is 2020.
+
+#### Literal source values
+
+A literal `-` in the population column must be preserved in the extracted
+source representation and normalized to `NULL`, not zero.
+
+An empty source cell must remain distinguishable from a literal `-`.
+
+#### Formula cells
+
+Some population cells contain Excel formulas rather than literal numeric
+values.
+
+For formula cells:
+
+- Preserve the original formula expression.
+- Obtain the cached result from the workbook using a `data_only=True` read.
+- Associate the formula and cached result with the same source cell.
+- Use a valid cached whole-number result as the extracted population value.
+- Do not execute or independently recalculate the source formula during
+  extraction.
+- Do not substitute zero or a value from another release when a cached
+  result is missing.
+- Generate a review finding when a formula has no usable cached result.
+
+The formula expression and cached result are source evidence. The normalized
+`population` value must remain traceable to both.
+
+A cached formula result represents the value saved by the workbook. The ETL
+must not claim that it independently verified the spreadsheet calculation.
+
+### 5.10 Population annotation
+
+Internal field: `population_annotation`
+
+This field originates from column 10 of the inspected `PSGC` worksheet,
+which has a blank source header.
+
+- Nullable.
+- Preserve the original source value and source location.
+- Do not merge it into the population value or geographic name.
+- Do not interpret it as an entity lifecycle status.
+
+Observed values include numbered references such as `17/`, `45/`, and
+explanatory text such as `(excluding BAGUIO CITY)`.
+
+Numbered references correspond to definitions in the `Notes` worksheet
+of the same PSA release.
+
+The ETL must:
+
+- Retain the original annotation exactly as published.
+- Retain the release-specific footnote definitions.
+- Resolve numbered references only against the corresponding release.
+- Never assume that the same footnote number has the same meaning across
+  different releases.
+- Preserve explanatory text that is not a numbered reference.
+- Avoid inferring or changing population values from annotation text.
+
+Population annotations provide context for interpreting published population
+figures. They do not independently establish geographic identity, hierarchy,
+or lifecycle status.
+
+### 5.11 Status
 
 Internal field: `source_status_value`
 
@@ -378,22 +518,47 @@ Initial validation rules:
 | Missing name | ERROR |
 | Invalid population representation | ERROR |
 | Unexpected worksheet structure | ERROR |
-| Non-empty unmapped source column | REVIEW |
-| Missing correspondence code | WARNING |
+| Non-empty source column without an approved mapping | REVIEW |
 | Duplicate correspondence code | REVIEW |
 | Unknown geographic level | REVIEW |
 | Unknown city class | REVIEW |
 | Unknown income classification | REVIEW |
 | Unresolved parent relationship | REVIEW |
 | Unexpected change in release record counts | REVIEW |
+| Numeric PSGC stored in an Excel numeric cell | WARNING |
+| Numeric correspondence code stored in an Excel numeric cell | WARNING |
+| Population formula without a usable cached result | REVIEW |
+| Invalid cached population formula result | ERROR |
+| Unresolved numbered population annotation reference | REVIEW |
 
 Validation must not silently repair source data.
 
 Where a transformation is deterministic and permitted by this contract, the ETL may normalize the value while retaining its original representation.
 
-A release containing errors must not be promoted as current.
+A release with unresolved `ERROR` findings must not be promoted as current.
+An affected record may be excluded from the published projection only through
+an explicitly approved, tested, and documented process that preserves the
+original source data and prevents the affected record from compromising
+published data integrity. Such an exclusion must have a recorded disposition;
+it must not silently downgrade the original finding.
 
-Warnings and review findings must be included in the import report. Any review conditions that affect identity resolution or hierarchy must be resolved before the release is published.
+Warnings and review findings must be included in the import report and reviewed by the person responsible for the import.
+
+A validation finding must not automatically be treated as a defect in the PSA source. The reviewer must determine whether it represents:
+
+- A legitimate source-data or workbook-structure variation that the ETL must support.
+- A genuine source-data defect that prevents safe promotion.
+- A non-blocking anomaly that can be retained and reported without compromising data integrity.
+
+When a legitimate source variation is not supported by the current ETL, the ETL logic or its documented mapping rules must be updated and tested against the original, unchanged workbook. The source workbook must never be edited to accommodate the implementation.
+
+A genuine source-data defect that affects data integrity must block promotion until it has been appropriately resolved. A documented disposition alone must not permit a release with an unresolved blocking defect to be promoted.
+
+If the affected source data cannot be safely resolved, the release must be rejected or the affected records must be excluded from the published projection through an explicitly approved, tested, and documented process. The original source values must remain preserved. The ETL must not silently repair or discard them.
+
+Review conditions affecting identity resolution or hierarchy must receive an explicit disposition. Unresolved conditions may be accepted as non-blocking only when the reviewer documents the rationale and the affected records are excluded from API behavior that requires the unresolved identity or hierarchy.
+
+The import report and release audit trail must record the reviewer's identity, decision, rationale, timestamp, and applicable ETL and rule versions.
 
 ## 8. Historical release comparison
 
@@ -489,8 +654,18 @@ The following source conditions must be represented in automated tests:
 11. `Capital` and `Pob.` source annotations.
 12. Literal placeholders such as `-`.
 13. Missing population values.
-14. Unexpected non-empty values in the blank-header column.
+14. Non-empty values in the blank-header column are preserved as population annotations.
 15. The three SGA barangay PSGC code changes between 1Q 2024 and 4Q 2024.
+16. Numeric PSGC cells that require decimal-free string normalization.
+17. Population cells containing literal `-` placeholders.
+18. Population cells containing formulas with cached numeric results.
+19. Population formulas with missing cached results.
+20. Population annotations containing numbered footnote references.
+21. Population annotations containing explanatory text.
+22. Release-specific population footnote definitions in the `Notes` worksheet.
+23. Income-classification annotations such as `*` and `-`.
+24. Urban/rural classification methodology references.
+25. Population and urban/rural reference years distinct from publication dates.
 
 These fixtures must verify that source preservation, validation, and normalization behave as specified.
 
