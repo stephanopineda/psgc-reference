@@ -42,12 +42,8 @@ def _record_summary(record: dict[str, Any]) -> dict[str, Any]:
         **_source_reference(record),
         "psgc_code": _normalized_value(record, "psgc_code"),
         "name": _normalized_value(record, "name"),
-        "correspondence_code": _normalized_value(
-            record, "correspondence_code"
-        ),
-        "geographic_level": _normalized_value(
-            record, "geographic_level"
-        ),
+        "correspondence_code": _normalized_value(record, "correspondence_code"),
+        "geographic_level": _normalized_value(record, "geographic_level"),
     }
 
 
@@ -115,16 +111,10 @@ def _release_metadata(
         "worksheet_name": normalized_release.get("worksheet_name"),
         "record_count": normalized_release.get("record_count"),
         "source_profile_id": normalized_release.get("source_profile_id"),
-        "extraction_profile_version": normalized_release.get(
-            "extraction_profile_version"
-        ),
+        "extraction_profile_version": normalized_release.get("extraction_profile_version"),
         "population_reference_year": metadata.get("population_reference_year"),
-        "urban_rural_reference_year": metadata.get(
-            "urban_rural_reference_year"
-        ),
-        "income_classification_basis": metadata.get(
-            "income_classification_basis"
-        ),
+        "urban_rural_reference_year": metadata.get("urban_rural_reference_year"),
+        "income_classification_basis": metadata.get("income_classification_basis"),
     }
 
 
@@ -136,24 +126,18 @@ def _candidate_groups(
     added_by_correspondence: dict[str, list[dict[str, Any]]] = defaultdict(list)
 
     for record in removed_records:
-        correspondence_code = _normalized_value(
-            record, "correspondence_code"
-        )
+        correspondence_code = _normalized_value(record, "correspondence_code")
         if isinstance(correspondence_code, str) and correspondence_code:
             removed_by_correspondence[correspondence_code].append(record)
 
     for record in added_records:
-        correspondence_code = _normalized_value(
-            record, "correspondence_code"
-        )
+        correspondence_code = _normalized_value(record, "correspondence_code")
         if isinstance(correspondence_code, str) and correspondence_code:
             added_by_correspondence[correspondence_code].append(record)
 
     groups: list[dict[str, Any]] = []
 
-    shared_codes = sorted(
-        removed_by_correspondence.keys() & added_by_correspondence.keys()
-    )
+    shared_codes = sorted(removed_by_correspondence.keys() & added_by_correspondence.keys())
 
     for correspondence_code in shared_codes:
         previous = sorted(
@@ -166,9 +150,7 @@ def _candidate_groups(
         )
 
         relationship_type = (
-            "ONE_TO_ONE"
-            if len(previous) == 1 and len(current) == 1
-            else "AMBIGUOUS"
+            "ONE_TO_ONE" if len(previous) == 1 and len(current) == 1 else "AMBIGUOUS"
         )
 
         groups.append(
@@ -176,17 +158,12 @@ def _candidate_groups(
                 "correspondence_code": correspondence_code,
                 "relationship_type": relationship_type,
                 "review_status": "REVIEW_REQUIRED",
-                "previous_records": [
-                    _record_summary(record) for record in previous
-                ],
-                "current_records": [
-                    _record_summary(record) for record in current
-                ],
+                "previous_records": [_record_summary(record) for record in previous],
+                "current_records": [_record_summary(record) for record in current],
             }
         )
 
     return groups
-
 
 
 def _incomparable_fields(
@@ -246,13 +223,9 @@ def compare_normalized_releases(
     removed_codes = sorted(previous_codes - current_codes)
     added_codes = sorted(current_codes - previous_codes)
 
-    incomparable_fields = _incomparable_fields(
-        previous_release, current_release
-    )
+    incomparable_fields = _incomparable_fields(previous_release, current_release)
     excluded_fields = {item["field_name"] for item in incomparable_fields}
-    comparable_fields = tuple(
-        field for field in COMPARABLE_FIELDS if field not in excluded_fields
-    )
+    comparable_fields = tuple(field for field in COMPARABLE_FIELDS if field not in excluded_fields)
 
     changed_records: list[dict[str, Any]] = []
 
@@ -269,12 +242,8 @@ def compare_normalized_releases(
                 changes.append(
                     {
                         "field_name": field_name,
-                        "before": _value_snapshot(
-                            previous_record, field_name
-                        ),
-                        "after": _value_snapshot(
-                            current_record, field_name
-                        ),
+                        "before": _value_snapshot(previous_record, field_name),
+                        "after": _value_snapshot(current_record, field_name),
                     }
                 )
 
@@ -300,12 +269,8 @@ def compare_normalized_releases(
 
     return {
         "comparison_version": "1.1",
-        "previous_release": _release_metadata(
-            previous_release, previous_release_id
-        ),
-        "current_release": _release_metadata(
-            current_release, current_release_id
-        ),
+        "previous_release": _release_metadata(previous_release, previous_release_id),
+        "current_release": _release_metadata(current_release, current_release_id),
         "summary": {
             "previous_record_count": len(previous),
             "current_record_count": len(current),
@@ -316,13 +281,136 @@ def compare_normalized_releases(
             "removed_count": len(removed_records),
             "candidate_group_count": len(candidate_groups),
         },
-        "added_records": [
-            _record_summary(record) for record in added_records
-        ],
+        "added_records": [_record_summary(record) for record in added_records],
         "removed_records": [
-            _record_summary(record) for record in removed_records
+            {
+                **_record_summary(record),
+                "classification": "REMOVED_FROM_RELEASE",
+            }
+            for record in removed_records
         ],
         "changed_records": changed_records,
         "incomparable_fields": incomparable_fields,
         "identity_candidate_groups": candidate_groups,
+    }
+
+
+def _index_hierarchy_edges(
+    edges: list[dict[str, Any]],
+    release_label: str,
+) -> dict[str, dict[str, Any]]:
+    """Index proposed hierarchy edges by child PSGC code."""
+    if not isinstance(edges, list):
+        raise TypeError(f"{release_label} hierarchy must contain an edges list")
+
+    indexed: dict[str, dict[str, Any]] = {}
+
+    for edge in edges:
+        if not isinstance(edge, dict):
+            raise TypeError(f"{release_label} hierarchy contains an invalid edge")
+
+        child = edge.get("child_psgc_code")
+        parent = edge.get("parent_psgc_code")
+
+        if not isinstance(child, str) or not child:
+            raise ValueError(f"{release_label} hierarchy contains an invalid child code")
+
+        if not isinstance(parent, str) or not parent:
+            raise ValueError(
+                f"{release_label} hierarchy contains an invalid parent code for child {child}"
+            )
+
+        if child in indexed:
+            raise ValueError(f"{release_label} hierarchy contains multiple edges for child {child}")
+
+        indexed[child] = edge
+
+    return indexed
+
+
+def _edge_snapshot(edge: dict[str, Any]) -> dict[str, Any]:
+    """Preserve the relationship and its source evidence."""
+    return {
+        "child_psgc_code": edge.get("child_psgc_code"),
+        "parent_psgc_code": edge.get("parent_psgc_code"),
+        "relationship_type": edge.get("relationship_type"),
+        "review_status": edge.get("review_status"),
+        "rationale": edge.get("rationale"),
+        "evidence_reference": edge.get("evidence_reference"),
+    }
+
+
+def compare_hierarchy_edges(
+    previous_edges: list[dict[str, Any]],
+    current_edges: list[dict[str, Any]],
+    *,
+    previous_release_id: str | None = None,
+    current_release_id: str | None = None,
+) -> dict[str, Any]:
+    """Compare proposed hierarchy relationships by child PSGC code.
+
+    This compares topology only. It does not infer geographic identity,
+    legal abolition, or the reason for a parent reassignment.
+    """
+    previous = _index_hierarchy_edges(previous_edges, "Previous")
+    current = _index_hierarchy_edges(current_edges, "Current")
+
+    previous_children = set(previous)
+    current_children = set(current)
+
+    retained_children = sorted(previous_children & current_children)
+    added_children = sorted(current_children - previous_children)
+    removed_children = sorted(previous_children - current_children)
+
+    unchanged_edges: list[dict[str, Any]] = []
+    changed_parent_relationships: list[dict[str, Any]] = []
+
+    for child in retained_children:
+        before = previous[child]
+        after = current[child]
+
+        before_parent = before["parent_psgc_code"]
+        after_parent = after["parent_psgc_code"]
+
+        if before_parent == after_parent:
+            unchanged_edges.append(
+                {
+                    "child_psgc_code": child,
+                    "edge": _edge_snapshot(after),
+                }
+            )
+        else:
+            changed_parent_relationships.append(
+                {
+                    "child_psgc_code": child,
+                    "previous_edge": _edge_snapshot(before),
+                    "current_edge": _edge_snapshot(after),
+                }
+            )
+
+    added_edges = [_edge_snapshot(current[child]) for child in added_children]
+    removed_edges = [
+        {
+            "classification": "REMOVED_FROM_HIERARCHY",
+            "edge": _edge_snapshot(previous[child]),
+        }
+        for child in removed_children
+    ]
+
+    return {
+        "comparison_version": "1.0",
+        "previous_release_id": previous_release_id,
+        "current_release_id": current_release_id,
+        "summary": {
+            "previous_edge_count": len(previous),
+            "current_edge_count": len(current),
+            "retained_child_count": len(retained_children),
+            "unchanged_edge_count": len(unchanged_edges),
+            "changed_parent_count": len(changed_parent_relationships),
+            "added_edge_count": len(added_edges),
+            "removed_edge_count": len(removed_edges),
+        },
+        "changed_parent_relationships": changed_parent_relationships,
+        "added_edges": added_edges,
+        "removed_edges": removed_edges,
     }

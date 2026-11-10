@@ -102,7 +102,7 @@ function createDatabase() {
             };
           }
 
-          if (sql.includes("GROUP BY geographic_level")) {
+          if (sql.includes("GROUP BY v.geographic_level")) {
             return {
               results: [
                 { geographic_level: null, record_count: 2 },

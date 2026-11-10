@@ -26,12 +26,18 @@ geographicLevels.get("/", async (context) => {
   const result = await context.env.DB
     .prepare(
       `SELECT
-        geographic_level,
+        v.geographic_level,
         COUNT(*) AS record_count
-      FROM source_records
-      WHERE release_id = ?
-      GROUP BY geographic_level
-      ORDER BY geographic_level COLLATE NOCASE`,
+      FROM source_records AS sr
+      INNER JOIN source_record_version_memberships AS vm
+        ON vm.release_id = sr.release_id
+        AND vm.psgc_code = sr.psgc_code
+      INNER JOIN source_record_versions AS v
+        ON v.version_id = vm.version_id
+        AND v.psgc_code = vm.psgc_code
+      WHERE sr.release_id = ?
+      GROUP BY v.geographic_level
+      ORDER BY v.geographic_level COLLATE NOCASE`,
     )
     .bind(releaseId)
     .all<{ geographic_level: string | null; record_count: number }>();

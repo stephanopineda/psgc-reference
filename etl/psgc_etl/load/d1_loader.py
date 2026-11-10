@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from psgc_etl.extract.psgc_extractor import extract_psgc_records
+from psgc_etl.hierarchy import build_hierarchy, validate_hierarchy
 from psgc_etl.transform.normalizer import normalize_psgc_records
 from psgc_etl.validate.validator import validate_psgc_records
 
@@ -76,6 +77,34 @@ def _json(value: Any) -> str:
         separators=(",", ":"),
         allow_nan=False,
     )
+
+
+def _version_id(record: dict[str, Any]) -> str:
+    identity = {
+        "psgc_code": record["psgc_code"],
+        "name": record["name"],
+        "correspondence_code": record["correspondence_code"],
+        "geographic_level": record["geographic_level"],
+        "old_names": record["old_names"],
+        "city_class": record["city_class"],
+        "income_classification": record["income_classification"],
+        "urban_rural": record["urban_rural"],
+        "population": record["population"],
+        "population_annotation": record["population_annotation"],
+        "source_status_value": record["source_status_value"],
+        "source_values_json": record["source_values_json"],
+        "normalization_events_json": record["normalization_events_json"],
+    }
+
+    canonical = json.dumps(
+        identity,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _database_path() -> Path:
@@ -227,12 +256,20 @@ def _insert_records(
     release_id: str,
     normalized: dict[str, Any],
 ) -> None:
-    sql = """
+    source_record_sql = """
         INSERT INTO source_records (
             release_id,
             psgc_code,
             source_record_id,
-            source_row_number,
+            source_row_number
+        )
+        VALUES (?, ?, ?, ?)
+    """
+
+    version_sql = """
+        INSERT OR IGNORE INTO source_record_versions (
+            version_id,
+            psgc_code,
             name,
             correspondence_code,
             geographic_level,
@@ -246,10 +283,21 @@ def _insert_records(
             source_values_json,
             normalization_events_json
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
 
-    rows = []
+    membership_sql = """
+        INSERT INTO source_record_version_memberships (
+            release_id,
+            psgc_code,
+            version_id
+        )
+        VALUES (?, ?, ?)
+    """
+
+    source_record_rows = []
+    versions_by_id = {}
+    membership_rows = []
 
     for record in normalized["records"]:
         cells = record["cells"]
@@ -260,9 +308,9 @@ def _insert_records(
 
         psgc_code = values["psgc_code"]
 
-        if not isinstance(psgc_code, str) or not psgc_code:
+        if not isinstance(psgc_code, str) or len(psgc_code) != 10:
             raise ValueError(
-                "Cannot import a record without a normalized PSGC code: "
+                "Cannot import a record without a valid 10-digit PSGC code: "
                 f"{record['source_record_id']}"
             )
 
@@ -279,30 +327,99 @@ def _insert_records(
                 f"Cannot import {psgc_code}: population is not an integer."
             )
 
-        source_record_id = record["source_record_id"]
+        source_values_json = _json(_source_values(record))
+        normalization_events_json = _json(_normalization_events(record))
 
-        rows.append(
+        version_record = {
+            **values,
+            "source_values_json": source_values_json,
+            "normalization_events_json": normalization_events_json,
+        }
+
+        version_id = _version_id(version_record)
+
+        source_record_rows.append(
             (
                 release_id,
                 psgc_code,
-                source_record_id,
+                record["source_record_id"],
                 record["source_row_number"],
-                values["name"],
-                values["correspondence_code"],
-                values["geographic_level"],
-                values["old_names"],
-                values["city_class"],
-                values["income_classification"],
-                values["urban_rural"],
-                population,
-                values["population_annotation"],
-                values["source_status_value"],
-                _json(_source_values(record)),
-                _json(_normalization_events(record)),
             )
         )
 
-    connection.executemany(sql, rows)
+        # The same version may occur in multiple releases.
+        versions_by_id[version_id] = (
+            version_id,
+            psgc_code,
+            values["name"],
+            values["correspondence_code"],
+            values["geographic_level"],
+            values["old_names"],
+            values["city_class"],
+            values["income_classification"],
+            values["urban_rural"],
+            population,
+            values["population_annotation"],
+            values["source_status_value"],
+            source_values_json,
+            normalization_events_json,
+        )
+
+        membership_rows.append(
+            (release_id, psgc_code, version_id)
+        )
+
+    connection.executemany(source_record_sql, source_record_rows)
+
+    expected_versions = list(versions_by_id.values())
+
+    connection.executemany(version_sql, expected_versions)
+
+    # Verify that an existing version ID represents the exact expected
+    # payload. INSERT OR IGNORE must not silently accept conflicting data.
+    version_columns = (
+        "version_id",
+        "psgc_code",
+        "name",
+        "correspondence_code",
+        "geographic_level",
+        "old_names",
+        "city_class",
+        "income_classification",
+        "urban_rural",
+        "population",
+        "population_annotation",
+        "source_status_value",
+        "source_values_json",
+        "normalization_events_json",
+    )
+
+    for start in range(0, len(expected_versions), 500):
+        batch = expected_versions[start:start + 500]
+        version_ids = [row[0] for row in batch]
+        placeholders = ", ".join("?" for _ in version_ids)
+
+        select_sql = (
+            f"SELECT {', '.join(version_columns)} "
+            "FROM source_record_versions "
+            f"WHERE version_id IN ({placeholders})"
+        )
+
+        stored_versions = {
+            row[0]: tuple(row)
+            for row in connection.execute(select_sql, version_ids)
+        }
+
+        for expected in batch:
+            version_id = expected[0]
+
+            if stored_versions.get(version_id) != expected:
+                raise RuntimeError(
+                    "Stored version payload conflicts with calculated "
+                    f"version ID: {version_id}"
+                )
+
+    connection.executemany(membership_sql, membership_rows)
 
 
 def _insert_findings(
@@ -583,6 +700,266 @@ def load_releases(
             except Exception:
                 connection.rollback()
                 raise
+    finally:
+        connection.close()
+
+    return results
+
+
+
+def _persist_hierarchy_edges(
+    connection: sqlite3.Connection,
+    release_id: str,
+    edges: list[dict[str, Any]],
+) -> dict[str, int]:
+    """Insert missing hierarchy edges without changing existing review decisions."""
+    expected = {}
+
+    for edge in edges:
+        key = (
+            edge["parent_psgc_code"],
+            edge["child_psgc_code"],
+            edge["relationship_type"],
+        )
+
+        if key in expected:
+            raise RuntimeError(
+                f"Duplicate proposed hierarchy edge for {release_id}: {key}"
+            )
+
+        expected[key] = edge
+
+    existing_rows = connection.execute(
+        """
+        SELECT
+            parent_psgc_code,
+            child_psgc_code,
+            relationship_type,
+            evidence_reference,
+            rationale,
+            review_status
+        FROM record_hierarchy
+        WHERE release_id = ?
+        """,
+        (release_id,),
+    ).fetchall()
+
+    existing = {}
+
+    for row in existing_rows:
+        key = (
+            row["parent_psgc_code"],
+            row["child_psgc_code"],
+            row["relationship_type"],
+        )
+
+        if key in existing:
+            raise RuntimeError(
+                f"Duplicate stored hierarchy edge for {release_id}: {key}"
+            )
+
+        existing[key] = row
+
+    unexpected = set(existing) - set(expected)
+    if unexpected:
+        raise RuntimeError(
+            f"Stored hierarchy for {release_id} contains unexpected edges: "
+            f"{sorted(unexpected)[:5]}"
+        )
+
+    for key, row in existing.items():
+        edge = expected[key]
+
+        if (
+            row["evidence_reference"] != edge["evidence_reference"]
+            or row["rationale"] != edge["rationale"]
+        ):
+            raise RuntimeError(
+                f"Stored hierarchy evidence differs from the source-derived "
+                f"proposal for {release_id}: {key}. Refusing to overwrite it."
+            )
+
+    inserted_count = 0
+
+    for key, edge in expected.items():
+        if key in existing:
+            continue
+
+        hierarchy_id = hashlib.sha256(
+            (
+                f"{release_id}|{edge['parent_psgc_code']}|"
+                f"{edge['child_psgc_code']}|{edge['relationship_type']}"
+            ).encode()
+        ).hexdigest()
+
+        connection.execute(
+            """
+            INSERT INTO record_hierarchy (
+                hierarchy_id,
+                release_id,
+                parent_psgc_code,
+                child_psgc_code,
+                relationship_type,
+                evidence_reference,
+                rationale,
+                review_status
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                hierarchy_id,
+                release_id,
+                edge["parent_psgc_code"],
+                edge["child_psgc_code"],
+                edge["relationship_type"],
+                edge["evidence_reference"],
+                edge["rationale"],
+                edge["review_status"],
+            ),
+        )
+        inserted_count += 1
+
+    return {
+        "inserted_count": inserted_count,
+        "existing_count": len(existing),
+        "total_count": len(expected),
+    }
+
+
+def load_hierarchies(
+    paths: list[Path],
+    *,
+    database_path: Path | None = None,
+) -> list[dict[str, Any]]:
+    """Build, validate, and persist hierarchy for already-imported releases."""
+    if not paths:
+        raise ValueError("No PSA workbooks were selected for hierarchy loading.")
+
+    resolved_paths = [path.resolve() for path in paths]
+
+    if len(set(resolved_paths)) != len(resolved_paths):
+        raise ValueError("The same workbook was selected more than once.")
+
+    for path in resolved_paths:
+        if not path.is_file():
+            raise FileNotFoundError(f"Workbook does not exist: {path}")
+        _release_metadata(path)
+
+    db_path = database_path or _database_path()
+
+    if not db_path.is_file():
+        raise FileNotFoundError(f"Local D1 database does not exist: {db_path}")
+
+    connection = sqlite3.connect(db_path, timeout=30)
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON")
+
+    results = []
+
+    try:
+        for path in resolved_paths:
+            connection.execute("BEGIN IMMEDIATE")
+
+            try:
+                metadata = _release_metadata(path)
+                release_id = metadata["release_id"]
+
+                extraction = extract_psgc_records(path)
+                normalized = normalize_psgc_records(extraction)
+
+                publication_date = normalized.get(
+                    "source_metadata", {}
+                ).get("publication_date")
+
+                if publication_date != metadata["publication_date"]:
+                    raise ValueError(
+                        f"Publication date mismatch for {release_id}: "
+                        f"manifest={metadata['publication_date']!r}, "
+                        f"workbook={publication_date!r}"
+                    )
+
+                artifact = normalized["source_artifact"]
+
+                stored_release = connection.execute(
+                    """
+                    SELECT source_sha256, record_count
+                    FROM releases
+                    WHERE release_id = ?
+                    """,
+                    (release_id,),
+                ).fetchone()
+
+                if stored_release is None:
+                    raise RuntimeError(
+                        f"Release {release_id} is not imported into D1. "
+                        "Run load-d1 first."
+                    )
+
+                if stored_release["source_sha256"] != artifact["sha256"]:
+                    raise RuntimeError(
+                        f"Source SHA-256 mismatch for {release_id}. "
+                        "Refusing to build hierarchy from a different workbook."
+                    )
+
+                actual_record_count = connection.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM source_records
+                    WHERE release_id = ?
+                    """,
+                    (release_id,),
+                ).fetchone()[0]
+
+                if (
+                    stored_release["record_count"] != normalized["record_count"]
+                    or actual_record_count != stored_release["record_count"]
+                ):
+                    raise RuntimeError(
+                        f"Record-count mismatch for {release_id}. "
+                        "Database integrity needs review."
+                    )
+
+                hierarchy = build_hierarchy(normalized, release_id)
+                validation = validate_hierarchy(normalized, hierarchy)
+
+                if hierarchy["finding_count"] != 0 or not validation["is_valid"]:
+                    raise RuntimeError(
+                        f"Hierarchy validation failed for {release_id}: "
+                        f"builder_findings={hierarchy['finding_count']}, "
+                        f"validator_errors={validation['error_count']}"
+                    )
+
+                persistence = _persist_hierarchy_edges(
+                    connection,
+                    release_id,
+                    hierarchy["edges"],
+                )
+
+                connection.commit()
+
+                results.append(
+                    {
+                        "release_id": release_id,
+                        "status": (
+                            "IMPORTED"
+                            if persistence["inserted_count"]
+                            else "ALREADY_CURRENT"
+                        ),
+                        "record_count": hierarchy["record_count"],
+                        "edge_count": persistence["total_count"],
+                        "inserted_count": persistence["inserted_count"],
+                        "existing_count": persistence["existing_count"],
+                        "validated_path_count": validation[
+                            "validated_path_count"
+                        ],
+                        "maximum_depth": validation["maximum_depth"],
+                    }
+                )
+
+            except Exception:
+                connection.rollback()
+                raise
+
     finally:
         connection.close()
 

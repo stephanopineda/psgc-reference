@@ -125,3 +125,136 @@ def test_finding_evidence_preserves_normalization_context():
     assert evidence["normalization_rationale"] == rationale
 
     connection.close()
+
+
+def _hierarchy_test_connection():
+    import sqlite3
+
+    connection = sqlite3.connect(":memory:")
+    connection.row_factory = sqlite3.Row
+    connection.execute(
+        """
+        CREATE TABLE record_hierarchy (
+            hierarchy_id TEXT PRIMARY KEY,
+            release_id TEXT NOT NULL,
+            parent_psgc_code TEXT NOT NULL,
+            child_psgc_code TEXT NOT NULL,
+            relationship_type TEXT NOT NULL,
+            evidence_reference TEXT,
+            rationale TEXT,
+            review_status TEXT NOT NULL
+        )
+        """
+    )
+    return connection
+
+
+def _hierarchy_test_edges():
+    return [
+        {
+            "release_id": "2026-Q3",
+            "parent_psgc_code": "1300000000",
+            "child_psgc_code": "1380100000",
+            "relationship_type": "PARENT_OF",
+            "evidence_reference": "PSGC worksheet row 10 (source_record_id=row-10)",
+            "rationale": "[RULE] City belongs to NCR.",
+            "review_status": "PROPOSED",
+        },
+        {
+            "release_id": "2026-Q3",
+            "parent_psgc_code": "1380100000",
+            "child_psgc_code": "1380100001",
+            "relationship_type": "PARENT_OF",
+            "evidence_reference": "PSGC worksheet row 11 (source_record_id=row-11)",
+            "rationale": "[RULE] Barangay belongs to city.",
+            "review_status": "PROPOSED",
+        },
+    ]
+
+
+def test_hierarchy_persistence_is_idempotent():
+    from psgc_etl.load.d1_loader import _persist_hierarchy_edges
+
+    connection = _hierarchy_test_connection()
+    edges = _hierarchy_test_edges()
+
+    first = _persist_hierarchy_edges(connection, "2026-Q3", edges)
+    second = _persist_hierarchy_edges(connection, "2026-Q3", edges)
+
+    assert first == {
+        "inserted_count": 2,
+        "existing_count": 0,
+        "total_count": 2,
+    }
+    assert second == {
+        "inserted_count": 0,
+        "existing_count": 2,
+        "total_count": 2,
+    }
+
+    count = connection.execute(
+        "SELECT COUNT(*) FROM record_hierarchy"
+    ).fetchone()[0]
+    assert count == 2
+
+    connection.close()
+
+
+def test_hierarchy_persistence_preserves_approved_status():
+    from psgc_etl.load.d1_loader import _persist_hierarchy_edges
+
+    connection = _hierarchy_test_connection()
+    edges = _hierarchy_test_edges()
+
+    _persist_hierarchy_edges(connection, "2026-Q3", edges)
+    connection.execute(
+        """
+        UPDATE record_hierarchy
+        SET review_status = 'APPROVED'
+        WHERE child_psgc_code = '1380100001'
+        """
+    )
+
+    result = _persist_hierarchy_edges(connection, "2026-Q3", edges)
+
+    status = connection.execute(
+        """
+        SELECT review_status
+        FROM record_hierarchy
+        WHERE child_psgc_code = '1380100001'
+        """
+    ).fetchone()["review_status"]
+
+    assert result["inserted_count"] == 0
+    assert status == "APPROVED"
+
+    connection.close()
+
+
+def test_hierarchy_persistence_rejects_conflicting_evidence():
+    import pytest
+
+    from psgc_etl.load.d1_loader import _persist_hierarchy_edges
+
+    connection = _hierarchy_test_connection()
+    edges = _hierarchy_test_edges()
+
+    _persist_hierarchy_edges(connection, "2026-Q3", edges)
+
+    connection.execute(
+        """
+        UPDATE record_hierarchy
+        SET rationale = 'Manually altered rationale.'
+        WHERE child_psgc_code = '1380100001'
+        """
+    )
+
+    with pytest.raises(RuntimeError, match="evidence differs"):
+        _persist_hierarchy_edges(connection, "2026-Q3", edges)
+
+    count = connection.execute(
+        "SELECT COUNT(*) FROM record_hierarchy"
+    ).fetchone()[0]
+    assert count == 2
+
+    connection.close()

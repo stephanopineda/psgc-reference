@@ -123,6 +123,10 @@ def test_added_and_removed_records_are_reported():
     assert result["summary"]["removed_count"] == 1
     assert result["added_records"][0]["psgc_code"] == "0100100020"
     assert result["removed_records"][0]["psgc_code"] == "0100100010"
+    assert (
+        result["removed_records"][0]["classification"]
+        == "REMOVED_FROM_RELEASE"
+    )
 
 
 def test_one_to_one_correspondence_match_is_only_a_candidate():
