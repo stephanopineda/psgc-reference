@@ -55,6 +55,22 @@ await check("release detail", "/v1/releases/2026-Q3", (body) => {
   assert(review?.count === 1, "Expected one review finding");
 });
 
+const unpublishedHierarchy = await fetch(
+  `${baseUrl}/v1/releases/2026-Q3/locations`,
+);
+const unpublishedBody = await unpublishedHierarchy.json();
+
+assert(
+  unpublishedHierarchy.status === 409,
+  "Expected HTTP 409 for an unpublished hierarchy",
+);
+assert(
+  unpublishedBody.error?.code === "HIERARCHY_NOT_PUBLISHED",
+  "Unexpected unpublished-hierarchy error code",
+);
+passed += 1;
+console.log("PASS unpublished hierarchy protection");
+
 await check(
   "geographic levels",
   "/v1/geographic-levels?release_id=2026-Q3",

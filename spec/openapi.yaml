@@ -78,6 +78,46 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /v1/releases/{releaseId}/locations:
+    get:
+      operationId: listReleaseLocations
+      summary: List regions or the immediate children of a location
+      description: >
+        Returns top-level regions when parent_code is omitted. When
+        parent_code is supplied, returns only its immediate children.
+        Clients can traverse the complete hierarchy by recursively requesting
+        children. All relationships belong to the selected release and only
+        approved relationships are exposed. The hierarchy must be explicitly
+        published before this endpoint can return data. An empty child list
+        means the selected location has no children.
+      parameters:
+        - $ref: "#/components/parameters/ReleaseId"
+        - name: parent_code
+          in: query
+          required: false
+          description: >
+            Ten-digit PSGC code of the parent location. Omit to list regions.
+          schema:
+            type: string
+            pattern: "^[0-9]{10}$"
+      responses:
+        "200":
+          description: Regions or immediate children in the selected release
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LocationListResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/HierarchyNotPublished"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/HierarchyIntegrityError"
+
   /v1/records:
     get:
       operationId: listRecords
@@ -191,6 +231,22 @@ components:
             $ref: "#/components/schemas/ErrorResponse"
     NotFound:
       description: Requested resource does not exist
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    HierarchyNotPublished:
+      description: >
+        The selected release exists, but its geographic hierarchy has not
+        been published. No hierarchy data is returned.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    HierarchyIntegrityError:
+      description: >
+        The published hierarchy metadata does not match the current records
+        or approved relationships, or the hierarchy failed an integrity check.
       content:
         application/json:
           schema:
@@ -349,6 +405,32 @@ components:
         - population
         - population_annotation
         - source_status_value
+
+    LocationListResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/SourceRecord"
+        meta:
+          type: object
+          properties:
+            release_id:
+              type: string
+            parent_code:
+              type: [string, "null"]
+              pattern: "^[0-9]{10}$"
+            count:
+              type: integer
+              minimum: 0
+          required:
+            - release_id
+            - parent_code
+            - count
+      required:
+        - data
+        - meta
 
     RecordDetail:
       allOf:

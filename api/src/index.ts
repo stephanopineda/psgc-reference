@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { Bindings } from "./config/env";
 import { ApiError } from "./domain/errors";
 import health from "./routes/health";
+import locations from "./routes/locations";
 import geographicLevels from "./routes/geographicLevels";
 import records from "./routes/records";
 import releases from "./routes/releases";
@@ -10,6 +11,7 @@ const app = new Hono<{ Bindings: Bindings }>();
 
 app.route("/healthz", health);
 app.route("/v1/releases", releases);
+app.route("/v1/releases/:releaseId/locations", locations);
 app.route("/v1/geographic-levels", geographicLevels);
 app.route("/v1/records", records);
 
