@@ -83,10 +83,10 @@ export class HierarchyRepository {
           FROM (
             SELECT sr.psgc_code
             FROM source_records AS sr
-            INNER JOIN source_record_version_memberships AS vm
+            LEFT JOIN source_record_version_memberships AS vm
               ON vm.release_id = sr.release_id
               AND vm.psgc_code = sr.psgc_code
-            INNER JOIN source_record_versions AS v
+            LEFT JOIN source_record_versions AS v
               ON v.version_id = vm.version_id
               AND v.psgc_code = vm.psgc_code
             LEFT JOIN record_hierarchy AS h
@@ -95,10 +95,17 @@ export class HierarchyRepository {
               AND h.relationship_type = 'PARENT_OF'
               AND h.review_status = 'APPROVED'
             WHERE sr.release_id = ?
-              AND v.geographic_level IS NOT NULL
-              AND v.geographic_level <> 'Reg'
-            GROUP BY sr.psgc_code
-            HAVING COUNT(h.hierarchy_id) <> 1
+            GROUP BY sr.psgc_code, v.version_id, v.geographic_level
+            HAVING
+              v.version_id IS NULL
+              OR (
+                v.geographic_level = 'Reg'
+                AND COUNT(h.hierarchy_id) <> 0
+              )
+              OR (
+                (v.geographic_level IS NULL OR v.geographic_level <> 'Reg')
+                AND COUNT(h.hierarchy_id) <> 1
+              )
           ) AS invalid_parent_records`,
         )
         .bind(releaseId)

@@ -207,15 +207,15 @@ function createDatabase(options?: { published?: boolean; corruptCount?: boolean 
               return { count: edges.length } as T;
             }
 
+            if (sql.includes("invalid_parent_records")) {
+              return { count: 0 } as T;
+            }
+
             if (sql.includes("geographic_level = 'Reg'")) {
               return {
                 count: records.filter((item) => item.geographic_level === "Reg")
                   .length,
               } as T;
-            }
-
-            if (sql.includes("invalid_parent_records")) {
-              return { count: 0 } as T;
             }
           }
 
