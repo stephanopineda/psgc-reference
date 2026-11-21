@@ -118,6 +118,43 @@ paths:
         "503":
           $ref: "#/components/responses/HierarchyIntegrityError"
 
+  /v1/locations:
+    get:
+      operationId: listLatestLocations
+      summary: List locations from the latest PSA release
+      description: >
+        Resolves the latest available PSA release using publication_date
+        descending, with release_id descending as a deterministic tie-breaker.
+        Returns regions when parent_code is omitted, or immediate children
+        when parent_code is supplied. The selected release must have a
+        published, integrity-valid hierarchy. The API does not fall back
+        to an older release if the latest release is unpublished.
+      parameters:
+        - name: parent_code
+          in: query
+          required: false
+          description: Ten-digit PSGC code of the parent location.
+          schema:
+            type: string
+            pattern: "^[0-9]{10}$"
+      responses:
+        "200":
+          description: Regions or immediate children from the latest PSA release
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LocationListResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/HierarchyNotPublished"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/HierarchyIntegrityError"
+
   /v1/records:
     get:
       operationId: listRecords
@@ -424,6 +461,9 @@ components:
             count:
               type: integer
               minimum: 0
+            publication_date:
+              type: string
+              format: date
           required:
             - release_id
             - parent_code

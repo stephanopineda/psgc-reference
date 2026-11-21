@@ -71,6 +71,20 @@ assert(
 passed += 1;
 console.log("PASS unpublished hierarchy protection");
 
+const latestHierarchy = await fetch(`${baseUrl}/v1/locations`);
+const latestBody = await latestHierarchy.json();
+
+assert(
+  latestHierarchy.status === 409,
+  "Expected HTTP 409 for an unpublished latest PSA hierarchy",
+);
+assert(
+  latestBody.error?.code === "HIERARCHY_NOT_PUBLISHED",
+  "Latest endpoint did not enforce publication protection",
+);
+passed += 1;
+console.log("PASS latest PSA hierarchy publication protection");
+
 await check(
   "geographic levels",
   "/v1/geographic-levels?release_id=2026-Q3",

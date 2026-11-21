@@ -72,4 +72,25 @@ export class ReleaseRepository {
 
     return result.results;
   }
+
+  async findLatest(): Promise<Release | null> {
+    return this.db
+      .prepare(
+        `SELECT
+          release_id, publication_date, source_filename, source_sha256,
+          source_size_bytes, worksheet_name, normalization_profile_version,
+          record_count, status, is_official_current, imported_at, created_at,
+          population_reference_year, urban_rural_reference_year,
+          income_classification_basis, source_profile_id,
+          extraction_profile_version
+        FROM releases
+        WHERE source_profile_id IN (
+          'psa-legacy-2024-2025',
+          'psa-2026-dof-074-2024'
+        )
+        ORDER BY publication_date DESC, release_id DESC
+        LIMIT 1`,
+      )
+      .first<Release>();
+  }
 }

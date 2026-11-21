@@ -148,6 +148,7 @@ const release = {
   release_id: releaseId,
   publication_date: "2026-09-30",
   source_filename: "fixture.xlsx",
+  source_profile_id: "psa-2026-dof-074-2024",
   source_sha256: "a".repeat(64),
   source_size_bytes: 1000,
   worksheet_name: "PSGC",
@@ -159,6 +160,21 @@ const release = {
   created_at: "2026-11-10T00:00:00",
 };
 
+const olderRelease = {
+  ...release,
+  release_id: "2025-Q1",
+  publication_date: "2025-03-31",
+  is_official_current: 1,
+  imported_at: "2026-11-21T00:00:00",
+};
+
+const nonPsaRelease = {
+  ...release,
+  release_id: "OTHER-2027",
+  publication_date: "2027-01-01",
+  source_profile_id: "other-source-profile",
+};
+
 type MockStatement = {
   sql: string;
   values: unknown[];
@@ -167,8 +183,14 @@ type MockStatement = {
   all: <T>() => Promise<{ results: T[] }>;
 };
 
-function createDatabase(options?: { published?: boolean; corruptCount?: boolean }) {
+function createDatabase(options?: {
+  published?: boolean;
+  corruptCount?: boolean;
+  releases?: Array<typeof release>;
+  publishedReleaseIds?: string[];
+}) {
   const published = options?.published ?? true;
+  const availableReleases = options?.releases ?? [release];
 
   return {
     prepare(sql: string): MockStatement {
@@ -181,13 +203,41 @@ function createDatabase(options?: { published?: boolean; corruptCount?: boolean 
         },
         async first<T>() {
           if (sql.includes("FROM releases")) {
-            return (statement.values[0] === releaseId ? release : null) as
-              | T
-              | null;
+            if (sql.includes("WHERE release_id = ?")) {
+              return (
+                availableReleases.find(
+                  (item) => item.release_id === statement.values[0],
+                ) ?? null
+              ) as T | null;
+            }
+
+            const psaProfiles = [
+              "psa-legacy-2024-2025",
+              "psa-2026-dof-074-2024",
+            ];
+
+            const latest = availableReleases
+              .filter(
+                (item) =>
+                  item.source_profile_id !== undefined &&
+                  psaProfiles.includes(item.source_profile_id),
+              )
+              .sort(
+                (a, b) =>
+                  b.publication_date.localeCompare(a.publication_date) ||
+                  b.release_id.localeCompare(a.release_id),
+              )[0];
+
+            return (latest ?? null) as T | null;
           }
 
           if (sql.includes("FROM hierarchy_publications")) {
-            if (!published) return null;
+            const requestedReleaseId = statement.values[0] as string;
+            const isPublished = options?.publishedReleaseIds
+              ? options.publishedReleaseIds.includes(requestedReleaseId)
+              : published;
+
+            if (!isPublished) return null;
 
             return {
               publication_status: "PUBLISHED",
@@ -280,18 +330,85 @@ async function request(
 }
 
 describe("release-scoped hierarchy API", () => {
+  it("returns regions from the latest PSA release by publication date", async () => {
+    const response = await request(
+      "/v1/locations",
+      createDatabase({
+        releases: [olderRelease, release, nonPsaRelease],
+      }),
+    );
+    const body = await response.json<{
+      data: Location[];
+      meta: {
+        release_id: string;
+        publication_date: string;
+        parent_code: string | null;
+        count: number;
+      };
+    }>();
+
+    expect(response.status).toBe(200);
+    expect(body.meta).toEqual({
+      release_id: releaseId,
+      publication_date: "2026-09-30",
+      parent_code: null,
+      count: 1,
+    });
+  });
+
+  it("returns immediate children from the latest PSA release", async () => {
+    const response = await request(
+      "/v1/locations?parent_code=0900100000",
+      createDatabase({
+        releases: [olderRelease, release],
+      }),
+    );
+    const body = await response.json<{
+      data: Location[];
+      meta: { release_id: string; publication_date: string };
+    }>();
+
+    expect(response.status).toBe(200);
+    expect(body.meta.release_id).toBe(releaseId);
+    expect(body.meta.publication_date).toBe("2026-09-30");
+    expect(body.data.map((item) => item.psgc_code)).toEqual([
+      "0900101000",
+    ]);
+  });
+
+  it("does not fall back when the latest PSA release is unpublished", async () => {
+    const response = await request(
+      "/v1/locations",
+      createDatabase({
+        releases: [olderRelease, release],
+        publishedReleaseIds: [olderRelease.release_id],
+      }),
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      error: { code: "HIERARCHY_NOT_PUBLISHED" },
+    });
+  });
+
   it("returns only regions when parent_code is omitted", async () => {
     const response = await request(
       `/v1/releases/${releaseId}/locations`,
     );
     const body = await response.json<{
       data: Location[];
-      meta: { release_id: string; parent_code: string | null; count: number };
+      meta: {
+        release_id: string;
+        publication_date: string;
+        parent_code: string | null;
+        count: number;
+      };
     }>();
 
     expect(response.status).toBe(200);
     expect(body.meta).toEqual({
       release_id: releaseId,
+      publication_date: "2026-09-30",
       parent_code: null,
       count: 1,
     });

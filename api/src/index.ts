@@ -11,9 +11,10 @@ const app = new Hono<{ Bindings: Bindings }>();
 
 app.route("/healthz", health);
 app.route("/v1/releases", releases);
-app.route("/v1/releases/:releaseId/locations", locations);
 app.route("/v1/geographic-levels", geographicLevels);
 app.route("/v1/records", records);
+app.route("/v1/locations", locations);
+app.route("/v1/releases/:releaseId/locations", locations);
 
 app.notFound((context) =>
   context.json(

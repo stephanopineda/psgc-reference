@@ -8,27 +8,24 @@ import { ReleaseRepository } from "../repositories/d1/releaseRepository";
 const locations = new Hono<{ Bindings: Bindings }>();
 
 locations.get("/", async (context) => {
-  const releaseId = context.req.param("releaseId");
+  const requestedReleaseId = context.req.param("releaseId");
+  const releases = new ReleaseRepository(context.env.DB);
 
-  if (!releaseId) {
-    throw new ApiError(
-      400,
-      "RELEASE_REQUIRED",
-      "A release identifier must be specified in the URL.",
-    );
-  }
-
-  const release = await new ReleaseRepository(context.env.DB).findById(
-    releaseId,
-  );
+  const release = requestedReleaseId
+    ? await releases.findById(requestedReleaseId)
+    : await releases.findLatest();
 
   if (!release) {
     throw new ApiError(
       404,
-      "RELEASE_NOT_FOUND",
-      "The requested release does not exist.",
+      requestedReleaseId ? "RELEASE_NOT_FOUND" : "NO_RELEASES_AVAILABLE",
+      requestedReleaseId
+        ? "The requested release does not exist."
+        : "No PSA releases are available.",
     );
   }
+
+  const releaseId = release.release_id;
 
   const parentCodes = context.req.queries("parent_code") ?? [];
 
@@ -59,6 +56,7 @@ locations.get("/", async (context) => {
 
     return success(context, regions, {
       release_id: releaseId,
+      publication_date: release.publication_date,
       parent_code: null,
       count: regions.length,
     });
@@ -81,6 +79,7 @@ locations.get("/", async (context) => {
 
   return success(context, children, {
     release_id: releaseId,
+    publication_date: release.publication_date,
     parent_code: parentCode,
     count: children.length,
   });
