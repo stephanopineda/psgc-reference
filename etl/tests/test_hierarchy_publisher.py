@@ -66,25 +66,38 @@ def _database(path):
 
         INSERT INTO source_records VALUES
             ('2026-Q3', '0100000000'),
-            ('2026-Q3', '0100100000');
+            ('2026-Q3', '0100100000'),
+            ('2026-Q3', '0100101000');
 
         INSERT INTO source_record_version_memberships VALUES
             ('2026-Q3', '0100000000', 'version-region'),
-            ('2026-Q3', '0100100000', 'version-municipality');
+            ('2026-Q3', '0100100000', 'version-province'),
+            ('2026-Q3', '0100101000', 'version-municipality');
 
         INSERT INTO source_record_versions VALUES
             ('version-region', '0100000000', 'Reg'),
-            ('version-municipality', '0100100000', 'Mun');
+            ('version-province', '0100100000', 'Prov'),
+            ('version-municipality', '0100101000', 'Mun');
 
-        INSERT INTO record_hierarchy VALUES (
-            '2026-Q3',
-            '0100000000',
-            '0100100000',
-            'PARENT_OF',
-            'PSA PSGC publication',
-            'Municipality belongs to Region',
-            'APPROVED'
-        );
+        INSERT INTO record_hierarchy VALUES
+            (
+                '2026-Q3',
+                '0100000000',
+                '0100100000',
+                'PARENT_OF',
+                'PSA PSGC publication',
+                'Province belongs to Region',
+                'APPROVED'
+            ),
+            (
+                '2026-Q3',
+                '0100100000',
+                '0100101000',
+                'PARENT_OF',
+                'PSA PSGC publication',
+                'Municipality belongs to Province',
+                'APPROVED'
+            );
         """
     )
     connection.commit()
@@ -120,8 +133,8 @@ def test_valid_approved_hierarchy_is_published(tmp_path):
     assert result["validation"]["is_valid"] is True
     assert _publication(database) == (
         "PUBLISHED",
+        3,
         2,
-        1,
         "PSA 2026 Q3 hierarchy review",
     )
     connection = sqlite3.connect(database)
@@ -138,8 +151,8 @@ def test_valid_approved_hierarchy_is_published(tmp_path):
         "HIERARCHY_PUBLISHED", None, "PUBLISHED", "Test Operator",
         "PSA 2026 Q3 hierarchy review",
     )
-    assert '"record_count": 2' in event[5]
-    assert '"approved_edge_count": 1' in event[5]
+    assert '"record_count": 3' in event[5]
+    assert '"approved_edge_count": 2' in event[5]
 
 
 def test_validate_only_does_not_create_publication(tmp_path):

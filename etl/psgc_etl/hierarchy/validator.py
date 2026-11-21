@@ -1,4 +1,4 @@
-"""Independent structural validation for release-specific PSGC hierarchies."""
+"""Independent structural and semantic validation of PSGC hierarchies."""
 
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ ALLOWED_REVIEW_STATUSES = {
     "REJECTED",
 }
 
+MANILA_CODE = "1380600000"
 ISABELA_GROUP_CODE = "0990100000"
 ISABELA_CITY_CODE = "0990101000"
 REGION_IX_CODE = "0900000000"
@@ -80,6 +81,58 @@ def _value(record: Mapping[str, Any], field: str) -> Any:
     return record.get("cells", {}).get(field, {}).get("normalized_value")
 
 
+def _expected_parent_code(record: Mapping[str, Any]) -> str | None:
+    """Independently derive the expected immediate parent PSGC code.
+
+    This deliberately does not call the hierarchy builder. It verifies
+    generated edges against PSGC code segments and explicit exceptions.
+    """
+    code = _value(record, "psgc_code")
+    level = _value(record, "geographic_level")
+    city_class = _value(record, "city_class")
+
+    if level == "Reg":
+        return None
+
+    if level is None and code == ISABELA_GROUP_CODE:
+        return REGION_IX_CODE
+
+    if level is None and code == SGA_GROUP_CODE:
+        return BARMM_REGION_CODE
+
+    if level == "Prov":
+        return code[:2] + "00000000"
+
+    if level == "City" and city_class in {"HUC", "ICC"}:
+        return code[:2] + "00000000"
+
+    if level == "City" and code == ISABELA_CITY_CODE:
+        return ISABELA_GROUP_CODE
+
+    if level == "City" and city_class == "CC":
+        if code.startswith("13"):
+            return code[:2] + "00000000"
+        return code[:5] + "00000"
+
+    if level == "Mun":
+        if code.startswith("13"):
+            return code[:2] + "00000000"
+        if code.startswith("19999"):
+            return SGA_GROUP_CODE
+        return code[:5] + "00000"
+
+    if level == "SGU":
+        return SGA_GROUP_CODE
+
+    if level == "SubMun" and code.startswith("13806"):
+        return MANILA_CODE
+
+    if level == "Bgy":
+        return code[:7] + "000"
+
+    return None
+
+
 def _finding(
     code: str,
     message: str,
@@ -105,11 +158,13 @@ def validate_hierarchy(
     normalized: Mapping[str, Any],
     hierarchy: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Independently validate candidate hierarchy coverage and topology.
+    """Independently validate candidate hierarchy coverage and correctness.
 
-    Checks record identity, parent uniqueness, parent existence, allowed
-    geographic-level transitions, Region roots, cycles, and paths terminating
-    at a Region. This function does not modify the hierarchy or write to D1.
+    Checks record identity, parent uniqueness, parent existence, expected
+    parent codes, allowed geographic-level transitions, Region roots, cycles,
+    and paths terminating at a Region. Semantic parent-code checks apply to
+    recognized geographic levels and classifications. This function does not
+    modify the hierarchy or write to D1.
     """
     findings: list[dict[str, Any]] = []
 
@@ -262,6 +317,20 @@ def validate_hierarchy(
         if parent_record is not None and child_record is not None:
             parent_level = _value(parent_record, "geographic_level")
             child_level = _value(child_record, "geographic_level")
+
+            expected_parent = _expected_parent_code(child_record)
+            if expected_parent is not None and parent != expected_parent:
+                findings.append(
+                    _finding(
+                        "PARENT_CODE_MISMATCH",
+                        (
+                            "Parent PSGC code does not match the expected "
+                            f"parent code {expected_parent}."
+                        ),
+                        psgc_code=child,
+                        parent_psgc_code=parent,
+                    )
+                )
 
             if not _is_allowed_transition(
                 parent_level,

@@ -287,3 +287,54 @@ def test_sga_grouping_cannot_accept_unrelated_city_records():
 
     assert result["is_valid"] is False
     assert result["finding_counts"]["INVALID_LEVEL_TRANSITION"] >= 1
+
+
+def test_wrong_but_allowed_region_parent_is_reported_for_huc():
+    normalized, hierarchy = _valid_fixture()
+    hierarchy = deepcopy(hierarchy)
+
+    edge = next(
+        edge
+        for edge in hierarchy["edges"]
+        if edge["child_psgc_code"] == "1380600000"
+    )
+    edge["parent_psgc_code"] = "0900000000"
+
+    result = validate_hierarchy(normalized, hierarchy)
+
+    assert result["is_valid"] is False
+    assert result["finding_counts"]["PARENT_CODE_MISMATCH"] == 1
+
+
+def test_wrong_but_allowed_region_parent_is_reported_for_pateros():
+    normalized, hierarchy = _valid_fixture()
+    hierarchy = deepcopy(hierarchy)
+
+    edge = next(
+        edge
+        for edge in hierarchy["edges"]
+        if edge["child_psgc_code"] == "1381701000"
+    )
+    edge["parent_psgc_code"] = "0900000000"
+
+    result = validate_hierarchy(normalized, hierarchy)
+
+    assert result["is_valid"] is False
+    assert result["finding_counts"]["PARENT_CODE_MISMATCH"] == 1
+
+
+def test_wrong_but_allowed_administrative_parent_is_reported_for_barangay():
+    normalized, hierarchy = _valid_fixture()
+    hierarchy = deepcopy(hierarchy)
+
+    edge = next(
+        edge
+        for edge in hierarchy["edges"]
+        if edge["child_psgc_code"] == "1380601001"
+    )
+    edge["parent_psgc_code"] = "1380600000"
+
+    result = validate_hierarchy(normalized, hierarchy)
+
+    assert result["is_valid"] is False
+    assert result["finding_counts"]["PARENT_CODE_MISMATCH"] == 1
