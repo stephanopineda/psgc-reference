@@ -118,6 +118,8 @@ def _database_path() -> Path:
         path
         for path in D1_LOCAL_DIR.glob("*.sqlite")
         if path.name != "metadata.sqlite"
+        and "-pre-" not in path.name
+        and "backup" not in path.name.lower()
     )
 
     if len(candidates) != 1:

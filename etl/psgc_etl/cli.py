@@ -19,6 +19,9 @@ from psgc_etl.extract import (
 )
 from psgc_etl.extract.psgc_extractor import extract_psgc_records
 from psgc_etl.hierarchy import build_hierarchy, validate_hierarchy
+from psgc_etl.hierarchy.publisher import publish_hierarchy
+from psgc_etl.hierarchy.reviewer import review_hierarchy_edge
+from psgc_etl.hierarchy.withdrawal import withdraw_hierarchy
 from psgc_etl.load.d1_loader import (
     DEFAULT_SOURCE_DIR,
     RELEASES,
@@ -164,6 +167,97 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("data/processed/comparisons"),
         help="Directory for JSON comparison reports.",
+    )
+
+    publish_parser = subparsers.add_parser(
+        "publish-hierarchy",
+        help="Validate approved hierarchy edges and optionally publish one release.",
+    )
+    publish_parser.add_argument(
+        "--release",
+        choices=sorted(metadata["release_id"] for metadata in RELEASES.values()),
+        required=True,
+        help="Explicit PSGC release ID.",
+    )
+    publish_parser.add_argument(
+        "--database-path",
+        type=Path,
+        help="Explicit local Wrangler D1 SQLite file path.",
+    )
+    publish_parser.add_argument(
+        "--validate-only",
+        action="store_true",
+        help="Validate the approved hierarchy without changing publication metadata.",
+    )
+    publish_parser.add_argument(
+        "--publication-reference",
+        help="Operator-supplied source, review, or approval reference required to publish.",
+    )
+    publish_parser.add_argument(
+        "--published-by",
+        help="Operator identity responsible for publication; required unless --validate-only is used.",
+    )
+
+    review_parser = subparsers.add_parser(
+        "review-hierarchy",
+        help="Approve or reject one proposed hierarchy edge with an audit event.",
+    )
+    review_parser.add_argument(
+        "--release",
+        choices=sorted(metadata["release_id"] for metadata in RELEASES.values()),
+        required=True,
+        help="Explicit PSGC release ID.",
+    )
+    review_parser.add_argument(
+        "--hierarchy-id",
+        required=True,
+        help="Exact hierarchy_id of the proposed edge.",
+    )
+    review_parser.add_argument(
+        "--decision",
+        choices=("approve", "reject"),
+        required=True,
+        help="Review decision.",
+    )
+    review_parser.add_argument(
+        "--reviewed-by",
+        required=True,
+        help="Reviewer identity for the audit record.",
+    )
+    review_parser.add_argument(
+        "--note",
+        required=True,
+        help="Decision rationale; must not be empty.",
+    )
+    review_parser.add_argument(
+        "--database-path",
+        type=Path,
+        help="Explicit local Wrangler D1 SQLite file path.",
+    )
+    withdraw_parser = subparsers.add_parser(
+        "withdraw-hierarchy",
+        help="Withdraw a published hierarchy and record an audit event.",
+    )
+    withdraw_parser.add_argument(
+        "--release",
+        choices=sorted(metadata["release_id"] for metadata in RELEASES.values()),
+        required=True,
+        help="Explicit PSGC release ID.",
+    )
+    withdraw_parser.add_argument(
+        "--withdrawn-by",
+        required=True,
+        help="Operator identity for the audit record.",
+    )
+    withdraw_parser.add_argument(
+        "--reason",
+        required=True,
+        help="Reason for withdrawing the published hierarchy.",
+    )
+    withdraw_parser.add_argument(
+        "--database-path",
+        type=Path,
+        help="Explicit local Wrangler D1 SQLite file path.",
     )
 
     return parser
@@ -590,6 +684,110 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
 
             return 0 if all_valid else 1
+
+        except (
+            OSError,
+            ValueError,
+            KeyError,
+            RuntimeError,
+            sqlite3.Error,
+        ) as error:
+            print(f"ERROR: {error}", file=sys.stderr)
+            return 2
+
+    if args.command == "review-hierarchy":
+        try:
+            result = review_hierarchy_edge(
+                args.release,
+                args.hierarchy_id,
+                decision=args.decision,
+                reviewed_by=args.reviewed_by,
+                decision_note=args.note,
+                database_path=args.database_path,
+            )
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+            return 0
+
+        except (
+            OSError,
+            ValueError,
+            KeyError,
+            RuntimeError,
+            sqlite3.Error,
+        ) as error:
+            print(f"ERROR: {error}", file=sys.stderr)
+            return 2
+
+    if args.command == "withdraw-hierarchy":
+        try:
+            result = withdraw_hierarchy(
+                args.release,
+                withdrawn_by=args.withdrawn_by,
+                reason=args.reason,
+                database_path=args.database_path,
+            )
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+            return 0
+
+        except (
+            OSError,
+            ValueError,
+            KeyError,
+            RuntimeError,
+            sqlite3.Error,
+        ) as error:
+            print(f"ERROR: {error}", file=sys.stderr)
+            return 2
+
+    if args.command == "publish-hierarchy":
+        try:
+            result = publish_hierarchy(
+                args.release,
+                published_by=args.published_by,
+                database_path=args.database_path,
+                publication_reference=args.publication_reference,
+                validate_only=args.validate_only,
+            )
+            validation = result["validation"]
+            findings = validation["findings"]
+            max_examples = 20
+
+            report = {
+                "operation": result["operation"],
+                "release_id": result["release_id"],
+                "validate_only": result["validate_only"],
+                "record_count": result["record_count"],
+                "approved_edge_count": result["approved_edge_count"],
+                "validation": {
+                    "is_valid": validation["is_valid"],
+                    "error_count": validation["error_count"],
+                    "finding_counts": validation["finding_counts"],
+                    "findings_shown": min(len(findings), max_examples),
+                    "findings_omitted": max(0, len(findings) - max_examples),
+                    "findings": findings[:max_examples],
+                },
+                "published": result["published"],
+                "publication_status": result.get(
+                    "publication_status", "NOT_PUBLISHED"
+                ),
+            }
+
+            if result.get("published_at"):
+                report["published_at"] = result["published_at"]
+
+            if result.get("publication_reference"):
+                report["publication_reference"] = result[
+                    "publication_reference"
+                ]
+
+            if result.get("published_by"):
+                report["published_by"] = result["published_by"]
+
+            print(json.dumps(report, indent=2, ensure_ascii=False))
+
+            if not result["validation"]["is_valid"]:
+                return 1
+            return 0
 
         except (
             OSError,
